@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "LimeNDAX"
-version = "1.0.2"
+version = "1.0.3"
 description = "Python Package for working with NDAX files (generated from NEWARE machines), developed by Lime.AI"
 readme = "README.md"
 authors = [{ name = "Lime AI Celltesting", email = "celltesting@lime.ai" }]
