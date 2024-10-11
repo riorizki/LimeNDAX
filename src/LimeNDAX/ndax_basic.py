@@ -6,7 +6,6 @@ import struct
 import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime
-from sys import displayhook
 
 ILLEGAL_CHARACTERS_RE = re.compile(r"[\000-\010]|[\013-\014]|[\016-\037]")
 
@@ -252,9 +251,9 @@ def get_values(ndax_file):
 
     """
 
-    if os.path.isdir(r".\ndax_temp_data"):
-        for i in os.listdir(r".\ndax_temp_data"):
-            file_path = os.path.join(r".\ndax_temp_data", i)
+    if os.path.isdir("ndax_temp_data"):
+        for i in os.listdir("ndax_temp_data"):
+            file_path = os.path.join("ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass

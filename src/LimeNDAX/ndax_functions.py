@@ -210,9 +210,9 @@ def to_df(file, include_aux: bool = False, step_cyclic_id: bool = False):
         df (pd.DataFrame): DataFrame containing all records in the file
     """
     # stime = time()
-    if os.path.isdir(r".\ndax_temp_data"):
-        for i in os.listdir(r".\ndax_temp_data"):
-            file_path = os.path.join(r".\ndax_temp_data", i)
+    if os.path.isdir("ndax_temp_data"):
+        for i in os.listdir("ndax_temp_data"):
+            file_path = os.path.join("ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -249,8 +249,7 @@ def to_df(file, include_aux: bool = False, step_cyclic_id: bool = False):
     # Version <8 have all data in data.ndc.
     # for version 8 files check if data_runInfo.ndc and data_step.ndc exist while data.ndc will be present in both.
     if all(
-        i in os.listdir(r".\ndax_temp_data")
-        for i in ["data_runInfo.ndc", "data_step.ndc"]
+        i in os.listdir("ndax_temp_data") for i in ["data_runInfo.ndc", "data_step.ndc"]
     ):
 
         # Read data from separate files
@@ -471,9 +470,9 @@ def get_stepxml(ndax_file):
         df (pd.DataFrame): DataFrame containing all records in the file
     """
 
-    if os.path.isdir(r".\ndax_temp_data"):
-        for i in os.listdir(r".\ndax_temp_data"):
-            file_path = os.path.join(r".\ndax_temp_data", i)
+    if os.path.isdir("ndax_temp_data"):
+        for i in os.listdir("ndax_temp_data"):
+            file_path = os.path.join("ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -550,9 +549,9 @@ def get_remarks(ndax_file):
         Remarks if any.
 
     """
-    if os.path.isdir(r".\ndax_temp_data"):
-        for i in os.listdir(r".\ndax_temp_data"):
-            file_path = os.path.join(r".\ndax_temp_data", i)
+    if os.path.isdir("ndax_temp_data"):
+        for i in os.listdir("ndax_temp_data"):
+            file_path = os.path.join("ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -594,9 +593,9 @@ def get_process_name(ndax_file):
 
     """
 
-    if os.path.isdir(r".\ndax_temp_data"):
-        for i in os.listdir(r".\ndax_temp_data"):
-            file_path = os.path.join(r".\ndax_temp_data", i)
+    if os.path.isdir("ndax_temp_data"):
+        for i in os.listdir("ndax_temp_data"):
+            file_path = os.path.join("ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -657,9 +656,9 @@ def get_barcode(ndax_file):
     # else:
     #     raise ValueError("File passed in function is not an ndax file")
 
-    if os.path.isdir(r".\ndax_temp_data"):
-        for i in os.listdir(r".\ndax_temp_data"):
-            file_path = os.path.join(r".\ndax_temp_data", i)
+    if os.path.isdir("ndax_temp_data"):
+        for i in os.listdir("ndax_temp_data"):
+            file_path = os.path.join("ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -715,9 +714,9 @@ def get_starttime(ndax_file):
     # else:
     #     raise ValueError("File passed in function is not an ndax file")
 
-    if os.path.isdir(r".\ndax_temp_data"):
-        for i in os.listdir(r".\ndax_temp_data"):
-            file_path = os.path.join(r".\ndax_temp_data", i)
+    if os.path.isdir("ndax_temp_data"):
+        for i in os.listdir("ndax_temp_data"):
+            file_path = os.path.join("ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -740,9 +739,9 @@ def get_starttime(ndax_file):
     root = ET.fromstring(xml_content)
     m1 = root.find(".//TestInfo").get("StartTime")
 
-    if os.path.isdir(r".\ndax_temp_data"):
-        for i in os.listdir(r".\ndax_temp_data"):
-            file_path = os.path.join(r".\ndax_temp_data", i)
+    if os.path.isdir("ndax_temp_data"):
+        for i in os.listdir("ndax_temp_data"):
+            file_path = os.path.join("ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
