@@ -1,12 +1,12 @@
 import codecs
-import xml.etree.ElementTree as ET
+import logging
 import os
-import zipfile
+import re
 import struct
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime
 from sys import displayhook
-import re
-import logging
 
 ILLEGAL_CHARACTERS_RE = re.compile(r"[\000-\010]|[\013-\014]|[\016-\037]")
 
@@ -252,9 +252,9 @@ def get_values(ndax_file):
 
     """
 
-    if os.path.isdir(r".\temdata"):
-        for i in os.listdir(r".\temdata"):
-            file_path = os.path.join(r".\temdata", i)
+    if os.path.isdir(r".\ndax_temp_data"):
+        for i in os.listdir(r".\ndax_temp_data"):
+            file_path = os.path.join(r".\ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -264,14 +264,14 @@ def get_values(ndax_file):
 
     f = zipfile.ZipFile(ndax_file, "r")
     for x in f.namelist():
-        f.extract(x, "./temdata/")
+        f.extract(x, "./ndax_temp_data/")
     f.close()
-    files = os.listdir("./temdata/")
+    files = os.listdir("./ndax_temp_data/")
     tempfile = ""
     for file in files:
         if len(file.split("_")) > 2:
-            tempfile = "./temdata/" + file
-    file = "./temdata/Step.xml"
+            tempfile = "./ndax_temp_data/" + file
+    file = "./ndax_temp_data/Step.xml"
     with codecs.open(file, "r", "GB2312") as file:
         xml_content = file.read()
     root = ET.fromstring(xml_content)

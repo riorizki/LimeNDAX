@@ -1,18 +1,19 @@
-import warnings
+import codecs
+import logging
 import mmap
+import os
+import re
+import struct
+import warnings
+import xml.etree.ElementTree as ET
+import zipfile
+from datetime import datetime, timedelta
+from sys import displayhook
+
 import numpy as np
 import pandas as pd
-import os
-import zipfile
-from sys import displayhook
-from datetime import timedelta
-from datetime import datetime
-import re
+
 from . import ndax_basic
-import codecs
-import xml.etree.ElementTree as ET
-import struct
-import logging
 
 
 def valid_rec(bytes):
@@ -209,9 +210,9 @@ def to_df(file, include_aux: bool = False, step_cyclic_id: bool = False):
         df (pd.DataFrame): DataFrame containing all records in the file
     """
     # stime = time()
-    if os.path.isdir(r".\temdata"):
-        for i in os.listdir(r".\temdata"):
-            file_path = os.path.join(r".\temdata", i)
+    if os.path.isdir(r".\ndax_temp_data"):
+        for i in os.listdir(r".\ndax_temp_data"):
+            file_path = os.path.join(r".\ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -221,10 +222,10 @@ def to_df(file, include_aux: bool = False, step_cyclic_id: bool = False):
 
     f = zipfile.ZipFile(file, "r")
     for x in f.namelist():
-        f.extract(x, "./temdata/")
+        f.extract(x, "./ndax_temp_data/")
     f.close()
-    # files = os.listdir("./temdata/")
-    data_file = "./temdata/data.ndc"
+    # files = os.listdir("./ndax_temp_data/")
+    data_file = "./ndax_temp_data/data.ndc"
     # ctime = time()
     # print("Time to extract: ",ctime - stime )
 
@@ -248,12 +249,13 @@ def to_df(file, include_aux: bool = False, step_cyclic_id: bool = False):
     # Version <8 have all data in data.ndc.
     # for version 8 files check if data_runInfo.ndc and data_step.ndc exist while data.ndc will be present in both.
     if all(
-        i in os.listdir(r".\temdata") for i in ["data_runInfo.ndc", "data_step.ndc"]
+        i in os.listdir(r".\ndax_temp_data")
+        for i in ["data_runInfo.ndc", "data_step.ndc"]
     ):
 
         # Read data from separate files
-        runInfo_file = "./temdata/data_runInfo.ndc"
-        step_file = "./temdata/data_step.ndc"
+        runInfo_file = "./ndax_temp_data/data_runInfo.ndc"
+        step_file = "./ndax_temp_data/data_step.ndc"
 
         # i, v, c
         data_df = data_ndc(data_file)
@@ -469,9 +471,9 @@ def get_stepxml(ndax_file):
         df (pd.DataFrame): DataFrame containing all records in the file
     """
 
-    if os.path.isdir(r".\temdata"):
-        for i in os.listdir(r".\temdata"):
-            file_path = os.path.join(r".\temdata", i)
+    if os.path.isdir(r".\ndax_temp_data"):
+        for i in os.listdir(r".\ndax_temp_data"):
+            file_path = os.path.join(r".\ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -481,14 +483,14 @@ def get_stepxml(ndax_file):
 
     f = zipfile.ZipFile(ndax_file, "r")
     for x in f.namelist():
-        f.extract(x, "./temdata/")
+        f.extract(x, "./ndax_temp_data/")
     f.close()
-    files = os.listdir("./temdata/")
+    files = os.listdir("./ndax_temp_data/")
     tempfile = ""
     for file in files:
         if len(file.split("_")) > 2:
-            tempfile = "./temdata/" + file
-    file = "./temdata/Step.xml"
+            tempfile = "./ndax_temp_data/" + file
+    file = "./ndax_temp_data/Step.xml"
 
     with codecs.open(file, "r", "GB2312") as file:
         xml_content = file.read()
@@ -548,9 +550,9 @@ def get_remarks(ndax_file):
         Remarks if any.
 
     """
-    if os.path.isdir(r".\temdata"):
-        for i in os.listdir(r".\temdata"):
-            file_path = os.path.join(r".\temdata", i)
+    if os.path.isdir(r".\ndax_temp_data"):
+        for i in os.listdir(r".\ndax_temp_data"):
+            file_path = os.path.join(r".\ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -560,14 +562,14 @@ def get_remarks(ndax_file):
 
     f = zipfile.ZipFile(ndax_file, "r")
     for x in f.namelist():
-        f.extract(x, "./temdata/")
+        f.extract(x, "./ndax_temp_data/")
     f.close()
-    files = os.listdir("./temdata/")
+    files = os.listdir("./ndax_temp_data/")
     tempfile = ""
     for file in files:
         if len(file.split("_")) > 2:
-            tempfile = "./temdata/" + file
-    file = "./temdata/Step.xml"
+            tempfile = "./ndax_temp_data/" + file
+    file = "./ndax_temp_data/Step.xml"
     with codecs.open(file, "r", "GB2312") as file:
         xml_content = file.read()
     root = ET.fromstring(xml_content)
@@ -592,9 +594,9 @@ def get_process_name(ndax_file):
 
     """
 
-    if os.path.isdir(r".\temdata"):
-        for i in os.listdir(r".\temdata"):
-            file_path = os.path.join(r".\temdata", i)
+    if os.path.isdir(r".\ndax_temp_data"):
+        for i in os.listdir(r".\ndax_temp_data"):
+            file_path = os.path.join(r".\ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -604,15 +606,15 @@ def get_process_name(ndax_file):
 
     f = zipfile.ZipFile(ndax_file, "r")
     for x in f.namelist():
-        f.extract(x, "./temdata/")
+        f.extract(x, "./ndax_temp_data/")
     f.close()
 
     tempfile = ""
-    for filename in os.listdir("./temdata/"):
+    for filename in os.listdir("./ndax_temp_data/"):
         if filename.endswith(".pqt"):
-            tempfile = "./temdata/" + filename
+            tempfile = "./ndax_temp_data/" + filename
 
-    file = "./temdata/TestInfo.xml"
+    file = "./ndax_temp_data/TestInfo.xml"
     with codecs.open(file, "r", "GB2312") as file:
         xml_content = file.read()
     root = ET.fromstring(xml_content)
@@ -621,7 +623,7 @@ def get_process_name(ndax_file):
         m1 = m1.strip(".xml")
 
     if m1 is None:
-        temp_dir = "./temdata/"
+        temp_dir = "./ndax_temp_data/"
         for file in os.listdir(temp_dir):
             if file.endswith(".xml"):
                 file_path = os.path.join(temp_dir, file)
@@ -655,9 +657,9 @@ def get_barcode(ndax_file):
     # else:
     #     raise ValueError("File passed in function is not an ndax file")
 
-    if os.path.isdir(r".\temdata"):
-        for i in os.listdir(r".\temdata"):
-            file_path = os.path.join(r".\temdata", i)
+    if os.path.isdir(r".\ndax_temp_data"):
+        for i in os.listdir(r".\ndax_temp_data"):
+            file_path = os.path.join(r".\ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -667,22 +669,22 @@ def get_barcode(ndax_file):
 
     f = zipfile.ZipFile(ndax_file, "r")
     for x in f.namelist():
-        f.extract(x, "./temdata/")
+        f.extract(x, "./ndax_temp_data/")
     f.close()
-    files = os.listdir("./temdata/")
+    files = os.listdir("./ndax_temp_data/")
     tempfile = ""
     for file in files:
         if len(file.split("_")) > 2:
-            tempfile = "./temdata/" + file
+            tempfile = "./ndax_temp_data/" + file
 
-    file = "./temdata/TestInfo.xml"
+    file = "./ndax_temp_data/TestInfo.xml"
     with codecs.open(file, "r", "GB2312") as file:
         xml_content = file.read()
     root = ET.fromstring(xml_content)
     m1 = root.find(".//TestInfo").get("Barcode")
 
     if m1 is None:
-        temp_dir = "./temdata/"
+        temp_dir = "./ndax_temp_data/"
         for file in os.listdir(temp_dir):
             if file.endswith(".xml"):
                 file_path = os.path.join(temp_dir, file)
@@ -713,9 +715,9 @@ def get_starttime(ndax_file):
     # else:
     #     raise ValueError("File passed in function is not an ndax file")
 
-    if os.path.isdir(r".\temdata"):
-        for i in os.listdir(r".\temdata"):
-            file_path = os.path.join(r".\temdata", i)
+    if os.path.isdir(r".\ndax_temp_data"):
+        for i in os.listdir(r".\ndax_temp_data"):
+            file_path = os.path.join(r".\ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
@@ -725,22 +727,22 @@ def get_starttime(ndax_file):
 
     f = zipfile.ZipFile(ndax_file, "r")
     for x in f.namelist():
-        f.extract(x, "./temdata/")
+        f.extract(x, "./ndax_temp_data/")
     f.close()
-    files = os.listdir("./temdata/")
+    files = os.listdir("./ndax_temp_data/")
     tempfile = ""
     for file in files:
         if len(file.split("_")) > 2:
-            tempfile = "./temdata/" + file
-    file = "./temdata/TestInfo.xml"
+            tempfile = "./ndax_temp_data/" + file
+    file = "./ndax_temp_data/TestInfo.xml"
     with codecs.open(file, "r", "GB2312") as file:
         xml_content = file.read()
     root = ET.fromstring(xml_content)
     m1 = root.find(".//TestInfo").get("StartTime")
 
-    if os.path.isdir(r".\temdata"):
-        for i in os.listdir(r".\temdata"):
-            file_path = os.path.join(r".\temdata", i)
+    if os.path.isdir(r".\ndax_temp_data"):
+        for i in os.listdir(r".\ndax_temp_data"):
+            file_path = os.path.join(r".\ndax_temp_data", i)
             try:
                 with open(file_path, "a"):
                     pass
