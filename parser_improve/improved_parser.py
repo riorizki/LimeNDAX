@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
-from .utils import ExcelLoader, ValidationUtils
+from .utils import ExcelLoader, ValidationUtils, DataFrameProcessor
 from .base_parsers import (
     StandardSheetParser,
     TestSheetParser,
@@ -74,7 +74,7 @@ class ImprovedExcelParser:
 
     def parse_file(self, file_path: str) -> Dict[str, Any]:
         """
-        Parse entire Excel file.
+        Parse entire Excel file with performance optimizations.
 
         Args:
             file_path: Path to Excel file
@@ -87,12 +87,29 @@ class ImprovedExcelParser:
             return {"error": "File not found", "file_path": file_path}
 
         try:
-            # Load all sheets
-            sheets = self.loader.load_workbook(file_path)
-            if not sheets:
-                return {"error": "Failed to load workbook", "file_path": file_path}
+            # Load only required sheets for better performance
+            required_sheets = self.config.SHEET_PARSE_ORDER
+            sheets = self.loader.load_required_sheets(file_path, required_sheets)
 
-            # Parse each sheet in the specified order
+            if not sheets:
+                # Fallback to loading all sheets if required sheets not found
+                sheets = self.loader.load_workbook(file_path)
+                if not sheets:
+                    # Check if file exists to provide better error message
+                    import os
+
+                    if not os.path.exists(file_path):
+                        return {
+                            "error": f"File not found: {file_path}",
+                            "file_path": file_path,
+                        }
+                    else:
+                        return {
+                            "error": f"Failed to load workbook - file may be corrupted or in unsupported format: {file_path}",
+                            "file_path": file_path,
+                        }
+
+            # Parse each sheet in the specified order with optimizations
             parsed_data = {}
             for sheet_name in self.config.SHEET_PARSE_ORDER:
                 # Get the parser for this sheet
@@ -105,6 +122,10 @@ class ImprovedExcelParser:
                 try:
                     df = sheets.get(sheet_name)
                     if df is not None:
+                        # Optimize large DataFrames before parsing
+                        if len(df) > 50000:  # Process large sheets in chunks
+                            df = DataFrameProcessor.process_large_dataframe(df)
+
                         parsed_data[result_key] = parser.parse(df)
                     else:
                         # Initialize with appropriate empty structure

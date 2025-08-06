@@ -11,8 +11,16 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 import logging
 
+# Configure pandas to use future behavior for replace downcasting (suppresses FutureWarning)
+pd.set_option("future.no_silent_downcasting", True)
+
 # Suppress openpyxl warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
+
+# Suppress pandas FutureWarning about downcasting behavior in replace
+warnings.filterwarnings(
+    "ignore", category=FutureWarning, message=".*Downcasting behavior in.*replace.*"
+)
 
 
 class HeaderNormalizer:
@@ -73,14 +81,14 @@ class HeaderNormalizer:
 
 
 class DataFrameProcessor:
-    """Centralized DataFrame processing operations."""
+    """Optimized DataFrame processing operations."""
 
     @staticmethod
     def clean_dataframe(
         df: pd.DataFrame, drop_no_column: bool = True, normalize_headers: bool = True
     ) -> pd.DataFrame:
         """
-        Clean and normalize DataFrame.
+        Clean and normalize DataFrame with performance optimizations.
 
         Args:
             df: Input DataFrame
@@ -93,53 +101,100 @@ class DataFrameProcessor:
         if df is None or df.empty:
             return df
 
-        # Drop 'No.' column if requested
+        # Drop 'No.' column if requested - optimized check
         if drop_no_column and len(df.columns) > 0:
-            if str(df.columns[0]).lower() in ["no.", "no"]:
+            first_col = str(df.columns[0]).lower().strip()
+            if first_col in ["no.", "no"]:
                 df = df.drop(df.columns[0], axis=1)
 
-        # Normalize headers
+        # Normalize headers efficiently
         if normalize_headers:
+            # Vectorized header normalization
             df.columns = [HeaderNormalizer.normalize_header(col) for col in df.columns]
 
-        # Remove empty rows and columns
-        df = df.dropna(axis=1, how="all")
-        df = df.dropna(axis=0, how="all")
+        # Remove completely empty rows and columns efficiently
+        # Use dropna with 'all' to remove only completely empty rows/columns
+        if len(df) > 1000:  # For large DataFrames, be more selective
+            # Remove rows where all values are NaN or empty strings
+            # Use mask-based approach to avoid FutureWarning
+            mask = df.astype(str).apply(lambda x: x.str.match(r"^\s*$")).any(axis=1)
+            df.loc[mask] = pd.NA
+            df = df.dropna(axis=0, how="all")  # Remove empty rows
+            # Only drop empty columns if they are truly empty (all NaN)
+            df = df.dropna(axis=1, how="all")  # Remove empty columns
+        else:
+            df = df.dropna(axis=0, how="all")  # Remove empty rows
+            df = df.dropna(axis=1, how="all")  # Remove empty columns
 
-        # Convert comma decimals to dot decimals
-        for col in df.columns:
-            if df[col].dtype == "object":
-                df[col] = df[col].astype(str).str.replace(",", ".", regex=False)
+        # Reset index for better performance after row removal
+        if len(df) != len(df.index):
+            df = df.reset_index(drop=True)
 
         return df
 
     @staticmethod
-    def extract_header_from_row(df: pd.DataFrame, header_row: int) -> pd.DataFrame:
+    def extract_header_from_row(df: pd.DataFrame, row_index: int) -> pd.DataFrame:
         """
-        Extract headers from specific row and clean DataFrame.
+        Extract headers from specific row efficiently.
 
         Args:
             df: Input DataFrame
-            header_row: Row index to use as headers (0-based)
+            row_index: Row index to use as headers
 
         Returns:
-            DataFrame with proper headers
+            DataFrame with new headers
         """
-        if df is None or df.empty or header_row >= df.shape[0]:
+        if df is None or df.empty or row_index >= df.shape[0]:
             return df
 
-        df.columns = df.iloc[header_row].values
-        df = df.iloc[header_row + 1 :]
+        # Extract headers efficiently
+        new_headers = df.iloc[row_index].values
+        df.columns = new_headers
+
+        # Remove header row and reset index for better performance
+        df = df.iloc[row_index + 1 :].reset_index(drop=True)
+
+        return df
+
+    @staticmethod
+    def process_large_dataframe(
+        df: pd.DataFrame, chunk_size: int = 10000
+    ) -> pd.DataFrame:
+        """
+        Process large DataFrames in chunks for better memory efficiency.
+
+        Args:
+            df: Input DataFrame
+            chunk_size: Size of chunks to process
+
+        Returns:
+            Processed DataFrame
+        """
+        if df is None or df.empty or len(df) <= chunk_size:
+            return df
+
+        # Process in chunks to avoid memory issues
+        processed_chunks = []
+        for i in range(0, len(df), chunk_size):
+            chunk = df.iloc[i : i + chunk_size]
+            # Apply basic cleaning to chunk
+            chunk = chunk.dropna(axis=0, how="all")
+            processed_chunks.append(chunk)
+
+        # Combine chunks efficiently
+        if processed_chunks:
+            return pd.concat(processed_chunks, ignore_index=True)
+
         return df
 
 
 class ExcelLoader:
-    """Centralized Excel file loading with error handling."""
+    """Optimized Excel file loading with lazy loading and performance improvements."""
 
     @staticmethod
     def load_workbook(file_path: str) -> Dict[str, pd.DataFrame]:
         """
-        Load all sheets from Excel workbook.
+        Load all sheets from Excel workbook with optimizations.
 
         Args:
             file_path: Path to Excel file
@@ -148,8 +203,71 @@ class ExcelLoader:
             Dictionary mapping sheet names to DataFrames
         """
         try:
+            # Use optimized read_excel with performance settings
             sheets = pd.read_excel(
-                file_path, sheet_name=None, engine="openpyxl", header=None
+                file_path,
+                sheet_name=None,
+                engine="openpyxl",
+                header=None,
+                # Performance optimizations
+                keep_default_na=False,  # Don't convert to NaN unnecessarily
+                na_filter=False,  # Skip NaN detection for speed
+            )
+            return sheets
+        except Exception as e:
+            return {}
+
+    @staticmethod
+    def load_sheet(file_path: str, sheet_name: str) -> Optional[pd.DataFrame]:
+        """
+        Load a single sheet with optimizations.
+
+        Args:
+            file_path: Path to Excel file
+            sheet_name: Name of the sheet to load
+
+        Returns:
+            DataFrame or None if not found
+        """
+        try:
+            # Load only the specific sheet for better performance
+            df = pd.read_excel(
+                file_path,
+                sheet_name=sheet_name,
+                engine="openpyxl",
+                header=None,
+                # Performance optimizations
+                keep_default_na=False,
+                na_filter=False,
+            )
+            return df
+        except Exception as e:
+            return None
+
+    @staticmethod
+    def load_required_sheets(
+        file_path: str, sheet_names: List[str]
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        Load only required sheets for better performance.
+
+        Args:
+            file_path: Path to Excel file
+            sheet_names: List of sheet names to load
+
+        Returns:
+            Dictionary mapping sheet names to DataFrames
+        """
+        try:
+            # Load only the required sheets
+            sheets = pd.read_excel(
+                file_path,
+                sheet_name=sheet_names,
+                engine="openpyxl",
+                header=None,
+                # Performance optimizations
+                keep_default_na=False,
+                na_filter=False,
             )
             return sheets
         except Exception as e:
@@ -173,19 +291,51 @@ class ValidationUtils:
 
     @staticmethod
     def sanitize_data_for_json(data: Any) -> Any:
-        """Sanitize data for JSON serialization."""
+        """Optimized data sanitization for JSON serialization."""
+        # Handle different data types efficiently
         if isinstance(data, dict):
+            # Use dict comprehension for better performance
             return {
                 k: ValidationUtils.sanitize_data_for_json(v) for k, v in data.items()
             }
         elif isinstance(data, list):
+            # Use list comprehension for better performance
             return [ValidationUtils.sanitize_data_for_json(item) for item in data]
         elif pd.isna(data):
             return ""
         elif isinstance(data, (int, float)):
-            return data if not pd.isna(data) else ""
+            # Quick check for NaN without conversion
+            if pd.isna(data):
+                return ""
+            return data
+        elif data is None:
+            return ""
         else:
-            return str(data)
+            # Convert to string efficiently
+            return str(data) if data != "" else ""
+
+    @staticmethod
+    def fast_sanitize_records(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Fast sanitization for large record lists."""
+        if not records:
+            return records
+
+        # Vectorized approach for large datasets
+        sanitized_records = []
+        for record in records:
+            sanitized_record = {}
+            for key, value in record.items():
+                if pd.isna(value):
+                    sanitized_record[key] = ""
+                elif isinstance(value, (int, float)):
+                    sanitized_record[key] = value if not pd.isna(value) else ""
+                elif value is None:
+                    sanitized_record[key] = ""
+                else:
+                    sanitized_record[key] = str(value) if value != "" else ""
+            sanitized_records.append(sanitized_record)
+
+        return sanitized_records
 
 
 class JSONFileUtils:

@@ -65,15 +65,16 @@ class BaseSheetParser(ABC):
         return True
 
     def preprocess_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Standard preprocessing for DataFrames."""
-        # Extract headers if needed
+        """Optimized preprocessing for DataFrames."""
+        # Extract headers if needed with optimizations
         if self.config.header_row > 0:
             df = self.processor.extract_header_from_row(df, self.config.header_row)
         elif self.config.header_row == 0:
+            # Faster header extraction
             df.columns = df.iloc[0].values
-            df = df.iloc[1:]
+            df = df.iloc[1:].reset_index(drop=True)
 
-        # Clean the DataFrame
+        # Clean the DataFrame with optimizations
         df = self.processor.clean_dataframe(
             df, drop_no_column=self.config.drop_no_column
         )
@@ -83,13 +84,16 @@ class BaseSheetParser(ABC):
     def postprocess_data(
         self, data: List[Dict[str, Any]]
     ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
-        """Post-process parsed data."""
-        # Sanitize for JSON
-        data = ValidationUtils.sanitize_data_for_json(data)
-
-        # Apply record limit
+        """Optimized post-processing of parsed data."""
+        # Apply record limit before sanitization for better performance
         if self.config.max_records:
             data = data[: self.config.max_records]
+
+        # Use fast sanitization for large datasets
+        if len(data) > 1000:
+            data = ValidationUtils.fast_sanitize_records(data)
+        else:
+            data = ValidationUtils.sanitize_data_for_json(data)
 
         # Return appropriate format
         if self.config.return_type == "dict" and data:
@@ -99,10 +103,10 @@ class BaseSheetParser(ABC):
 
 
 class StandardSheetParser(BaseSheetParser):
-    """Standard parser for most sheet types."""
+    """Optimized standard parser for most sheet types."""
 
     def parse(self, df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
-        """Parse standard sheet format."""
+        """Parse standard sheet format with optimizations."""
         if not self.validate_input(df):
             return []
 
@@ -112,8 +116,22 @@ class StandardSheetParser(BaseSheetParser):
             if df.empty:
                 return []
 
-            # Convert to records
-            data = df.to_dict(orient="records")
+            # Optimized conversion to records for large DataFrames
+            if len(df) > 10000:
+                # For large DataFrames, process in chunks to avoid memory issues
+                chunk_size = 5000
+                all_records = []
+
+                for i in range(0, len(df), chunk_size):
+                    chunk = df.iloc[i : i + chunk_size]
+                    chunk_records = chunk.to_dict(orient="records")
+                    all_records.extend(chunk_records)
+
+                data = all_records
+            else:
+                # For smaller DataFrames, use standard conversion
+                data = df.to_dict(orient="records")
+
             return self.postprocess_data(data)
 
         except Exception as e:

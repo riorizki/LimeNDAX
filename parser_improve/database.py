@@ -457,6 +457,8 @@ class DatabaseManager:
                         %s, %s, %s)
             """
 
+            # Prepare all step plan data for bulk insert
+            step_bulk_data = []
             for step in step_plan:
                 step_params = (
                     str(uuid.uuid4()),
@@ -487,10 +489,16 @@ class DatabaseManager:
                     current_time,
                     current_time,
                 )
-                queries.append((step_insert_query, step_params))
+                step_bulk_data.append(step_params)
 
         try:
+            # Execute main test insert first
             self.execute_transaction(queries)
+
+            # Then execute step plan bulk insert if needed
+            if step_plan and step_bulk_data:
+                self.execute_bulk_insert(step_insert_query, step_bulk_data)
+
             return test_id, None
 
         except Exception as e:
@@ -567,9 +575,7 @@ class DatabaseManager:
         # Extract test information and step plan
         cycle = test_data.get("cycle", [])
 
-        queries = []
-
-        # insert step plan if it exists
+        # insert cycle data if it exists
         if cycle:
             cycle_insert_query = """
                 INSERT INTO battery_pack_cycle_csv_test_cycles (
@@ -581,6 +587,8 @@ class DatabaseManager:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
 
+            # Prepare all cycle data for bulk insert
+            cycle_bulk_data = []
             for c in cycle:
                 cycle_params = (
                     str(uuid.uuid4()),
@@ -596,10 +604,11 @@ class DatabaseManager:
                     current_time,
                     current_time,
                 )
-                queries.append((cycle_insert_query, cycle_params))
+                cycle_bulk_data.append(cycle_params)
 
         try:
-            self.execute_transaction(queries)
+            if cycle and cycle_bulk_data:
+                self.execute_bulk_insert(cycle_insert_query, cycle_bulk_data)
             return test_id, None
 
         except Exception as e:
@@ -611,9 +620,7 @@ class DatabaseManager:
         # Extract test information and step plan
         steps = test_data.get("step", [])
 
-        queries = []
-
-        # insert step plan if it exists
+        # insert steps data if it exists
         if steps:
             steps_insert_query = """
                 INSERT INTO battery_pack_cycle_csv_test_steps (
@@ -625,6 +632,8 @@ class DatabaseManager:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
 
+            # Prepare all steps data for bulk insert
+            steps_bulk_data = []
             for step in steps:
                 step_params = (
                     str(uuid.uuid4()),
@@ -643,10 +652,11 @@ class DatabaseManager:
                     current_time,
                     current_time,
                 )
-                queries.append((steps_insert_query, step_params))
+                steps_bulk_data.append(step_params)
 
         try:
-            self.execute_transaction(queries)
+            if steps and steps_bulk_data:
+                self.execute_bulk_insert(steps_insert_query, steps_bulk_data)
             return test_id, None
 
         except Exception as e:

@@ -21,7 +21,7 @@ parent_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(parent_dir))
 
 from parser_improve import ImprovedExcelParser
-from parser_improve.config import db_config
+from parser_improve.config import db_config, DatabaseConfig
 from parser_improve.database import (
     BatteryPackNotFoundError,
     DatabaseError,
@@ -115,6 +115,47 @@ class InputValidator:
 
         return sanitized
 
+    @staticmethod
+    def validate_database_params(
+        host: str, user: str, password: str, database: str = None, port: int = None
+    ) -> bool:
+        """
+        Validate database connection parameters.
+
+        Args:
+            host: Database host
+            user: Database user
+            password: Database password (can be empty string)
+            database: Database name (optional)
+            port: Database port (optional)
+
+        Returns:
+            bool: True if valid, False otherwise.
+        """
+        # Check required parameters (password can be empty string)
+        if not host or not user or password is None:
+            return False
+
+        # Validate host format (basic check) - allow localhost, IPs, and hostnames
+        if not re.match(r"^[a-zA-Z0-9.-]+$", host):
+            return False
+
+        # Validate user format
+        if not re.match(r"^[a-zA-Z0-9_]+$", user):
+            return False
+
+        # Validate port if provided
+        if port is not None:
+            if not isinstance(port, int) or port < 1 or port > 65535:
+                return False
+
+        # Validate database name if provided
+        if database is not None:
+            if not re.match(r"^[a-zA-Z0-9_]+$", database):
+                return False
+
+        return True
+
 
 def create_response(
     status: str,
@@ -162,11 +203,27 @@ def parse_file_safely(file_path: str, save_json: bool = True) -> Dict[str, Any]:
     try:
         # Validate file path
         if not InputValidator.validate_file_path(file_path):
-            return create_response(
-                "ERROR",
-                f"Invalid file path or file does not exist: {file_path}",
-                file_path,
-            )
+            # Provide more specific error message
+            import os
+
+            if not os.path.exists(file_path):
+                return create_response(
+                    "ERROR",
+                    f"File not found: {file_path}",
+                    file_path,
+                )
+            elif not file_path.lower().endswith((".xlsx", ".xls")):
+                return create_response(
+                    "ERROR",
+                    f"Invalid file format. Expected .xlsx or .xls file: {file_path}",
+                    file_path,
+                )
+            else:
+                return create_response(
+                    "ERROR",
+                    f"Invalid file path or file does not exist: {file_path}",
+                    file_path,
+                )
 
         # Initialize parser with default settings
         parser = ImprovedExcelParser()
@@ -351,13 +408,14 @@ def process_battery_pack_test(
 def main():
     """
     Main function with comprehensive error handling and input validation.
+    Usage: python main_db.py <file_path> <battery_pack_id> [db_host] [db_user] [db_password] [db_name] [db_port]
     """
     try:
         # Validate command line arguments
-        if len(sys.argv) != 3:
+        if len(sys.argv) < 3:
             response = create_response(
                 "ERROR",
-                "Usage: python main_db.py <file_path> <battery_pack_id>",
+                "Usage: python main_db.py <file_path> <battery_pack_id> [db_host] [db_user] [db_password] [db_name] [db_port]",
                 None,
             )
             print(json.dumps(response, indent=0, ensure_ascii=False))
@@ -366,8 +424,61 @@ def main():
         file_path = InputValidator.sanitize_input(sys.argv[1])
         battery_pack_id = InputValidator.sanitize_input(sys.argv[2])
 
+        # Parse optional database parameters
+        db_manager = None
+        if len(sys.argv) >= 6:  # At least host, user, and password provided
+            db_host = InputValidator.sanitize_input(sys.argv[3])
+            db_user = InputValidator.sanitize_input(sys.argv[4])
+            db_password = (
+                sys.argv[5] if len(sys.argv) > 5 else ""
+            )  # Allow empty password
+            db_name = (
+                InputValidator.sanitize_input(sys.argv[6])
+                if len(sys.argv) > 6
+                else "battery_test_db"
+            )
+            db_port = (
+                int(sys.argv[7])
+                if len(sys.argv) > 7 and sys.argv[7].isdigit()
+                else 3306
+            )
+
+            # Validate database parameters (password can be empty)
+            if not InputValidator.validate_database_params(
+                db_host, db_user, db_password, db_name, db_port
+            ):
+                response = create_response(
+                    "ERROR",
+                    f"Invalid database connection parameters provided. Host: '{db_host}', User: '{db_user}', DB: '{db_name}', Port: {db_port}",
+                    file_path,
+                )
+                print(json.dumps(response, indent=0, ensure_ascii=False))
+                sys.exit(0)
+
+            # Create custom database configuration
+            custom_db_config = DatabaseConfig(
+                host=db_host,
+                port=db_port,
+                user=db_user,
+                password=db_password,
+                database=db_name,
+                pool_name="custom_pool",
+                pool_size=10,
+                pool_reset_session=True,
+                charset="utf8mb4",
+                autocommit=False,
+                connection_timeout=10,
+                use_ssl=False,
+                ssl_disabled=True,
+            )
+
+            # Create database manager with custom configuration
+            db_manager = DatabaseManager(custom_db_config)
+        else:
+            # Use default database manager
+            db_manager = get_database_manager()
+
         # Perform database health check
-        db_manager = get_database_manager()
         health_status = db_manager.health_check()
 
         if health_status["status"] != "healthy":
