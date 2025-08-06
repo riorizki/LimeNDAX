@@ -34,6 +34,21 @@ def parse_float(val):
         return None
 
 
+def extract_serial(row):
+    serial_bytes = []
+    for i in range(1, 18):
+        key = f"bms_serial_num_{i}"
+        val = row.get(key, "0")
+        try:
+            byte = int(val)
+        except Exception:
+            byte = 0
+        serial_bytes.append(byte)
+    # Convert ASCII codes to string, substitute non-printable with '.'
+    serial_str = "".join(chr(b) if 32 <= b <= 126 else "." for b in serial_bytes)
+    return serial_str.strip()
+
+
 def find_last_rest_10s_step(step_list, target_sec=10):
     best_step = None
     best_diff = float("inf")
@@ -145,7 +160,66 @@ def check_step_8(step_list, aux):
             ["cell_fluctuation", "NG", detail, f"Cell(s) >±1mV: {fails}"]
         )
 
-    # 5. (Skip CAN/serial checks unless data is present)
+    # ---- CAN PACKET CHECK ----
+    required_can_packets = [
+        [f"bms_status_{i}" for i in range(1, 10)],
+        [f"bms_id_{i}" for i in range(1, 4)],
+        ["bms_error_1"],
+        ["bms_obc_config"],
+    ]
+    can_fail = []
+    for packet_group in required_can_packets:
+        found = any(any(pkt in row for pkt in packet_group) for row in aux_win)
+        if not found:
+            can_fail.extend(packet_group)
+    if not can_fail:
+        result_table.append(
+            ["can_packets", "PASS", "All required CAN packets present", ""]
+        )
+    else:
+        result_table.append(
+            [
+                "can_packets",
+                "NG",
+                f"Missing: {can_fail}",
+                "Some CAN packets missing in window",
+            ]
+        )
+
+    # ---- SERIAL NUMBER CHECK ----
+    serials = set()
+    for row in aux_win:
+        serial_str = extract_serial(row)
+        if serial_str and serial_str != "." * 17 and serial_str != "0" * 17:
+            serials.add(serial_str)
+    if len(serials) == 1:
+        result_table.append(
+            [
+                "serial_number",
+                "PASS",
+                f"Serial={list(serials)[0]}",
+                "Serial number consistent",
+            ]
+        )
+    elif len(serials) > 1:
+        result_table.append(
+            [
+                "serial_number",
+                "NG",
+                f"Inconsistent serials: {serials}",
+                "Serial numbers inconsistent",
+            ]
+        )
+    else:
+        result_table.append(
+            [
+                "serial_number",
+                "NG",
+                "Serial number missing or invalid",
+                "Serial missing/invalid",
+            ]
+        )
+
     return result_table
 
 

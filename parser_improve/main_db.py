@@ -4,33 +4,32 @@ Main entry point for the parser improvement package with advanced database integ
 Simple interface with standardized JSON response format for JavaScript integration.
 """
 
-import sys
 import json
-import logging
+import re
+import sys
+import time
+import uuid
+import warnings
 from pathlib import Path
 from typing import Any, Dict, Optional
-import re
+
+# Suppress openpyxl warnings early
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 # Add parent directory to path for package imports
 parent_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(parent_dir))
 
 from parser_improve import ImprovedExcelParser
-from parser_improve.utils import JSONFileUtils
-from parser_improve.database import (
-    DatabaseManager,
-    get_database_manager,
-    DatabaseError,
-    BatteryPackNotFoundError,
-    TransactionError,
-)
 from parser_improve.config import db_config
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+from parser_improve.database import (
+    BatteryPackNotFoundError,
+    DatabaseError,
+    DatabaseManager,
+    TransactionError,
+    get_database_manager,
 )
-logger = logging.getLogger(__name__)
+from parser_improve.utils import JSONFileUtils
 
 
 class InputValidator:
@@ -121,6 +120,7 @@ def create_response(
     status: str,
     message: str,
     file_path: Optional[str] = None,
+    json_path: Optional[str] = None,
     data: Optional[Dict] = None,
     metadata: Optional[Dict] = None,
 ) -> Dict[str, Any]:
@@ -141,18 +141,20 @@ def create_response(
         "status": status,
         "message": message,
         "file_path": file_path,
+        "json_path": json_path,
         "data": data or {},
         "metadata": metadata or {},
         "timestamp": Path(__file__).stat().st_mtime if file_path else None,
     }
 
 
-def parse_file_safely(file_path: str) -> Dict[str, Any]:
+def parse_file_safely(file_path: str, save_json: bool = True) -> Dict[str, Any]:
     """
     Parse Excel file with comprehensive error handling.
 
     Args:
         file_path: Path to the Excel file to parse.
+        save_json: Whether to save JSON file (default True for compatibility).
 
     Returns:
         Dict: Standardized response with status, message, data, and metadata.
@@ -166,8 +168,6 @@ def parse_file_safely(file_path: str) -> Dict[str, Any]:
                 file_path,
             )
 
-        logger.info(f"Starting to parse file: {file_path}")
-
         # Initialize parser with default settings
         parser = ImprovedExcelParser()
 
@@ -176,10 +176,27 @@ def parse_file_safely(file_path: str) -> Dict[str, Any]:
 
         # Check if parsing failed
         if "error" in result:
-            logger.error(f"Parsing failed for {file_path}: {result['error']}")
             return create_response(
                 "ERROR", f"Parsing failed: {result['error']}", file_path
             )
+
+        json_path = None
+        if save_json:
+            # Save standardized response to JSON file for review
+            input_filename = Path(file_path).stem
+
+            # Generate a unique filename for the response
+            uuid_str = str(uuid.uuid4())
+            first_section = uuid_str.split("-")[0]
+            response_filename = f"{input_filename}_{first_section}_response.json"
+            response_output_path = Path("result") / response_filename
+
+            # Ensure result directory exists
+            response_output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(response_output_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=0, ensure_ascii=False)
+
+            json_path = str(response_output_path.absolute())
 
         # Extract data and metadata from result
         data = result.get("data", {})
@@ -195,11 +212,16 @@ def parse_file_safely(file_path: str) -> Dict[str, Any]:
 
         success_message = f"Successfully parsed {sheets_parsed} sheets with {total_records:,} total records"
 
-        logger.info(f"File parsing completed successfully: {success_message}")
-        return create_response("SUCCESS", success_message, file_path, data, metadata)
+        return create_response(
+            "SUCCESS",
+            success_message,
+            file_path,
+            json_path,
+            data,
+            metadata,
+        )
 
     except Exception as e:
-        logger.error(f"Unexpected error during file parsing: {e}", exc_info=True)
         return create_response("ERROR", f"Unexpected error: {str(e)}", file_path)
 
 
@@ -207,7 +229,7 @@ def process_battery_pack_test(
     file_path: str, battery_pack_id: str, db_manager: DatabaseManager
 ) -> Dict[str, Any]:
     """
-    Process battery pack test data with database integration.
+    Process battery pack test data with database integration and performance optimization.
 
     Args:
         file_path: Path to the Excel file.
@@ -218,87 +240,111 @@ def process_battery_pack_test(
         Dict: Processing result.
     """
     try:
+        start_time = time.time()
+
         # Validate and sanitize inputs
         if not InputValidator.validate_battery_pack_id(battery_pack_id):
             return create_response("ERROR", "Invalid battery pack ID format", file_path)
 
         battery_pack_id = InputValidator.sanitize_input(battery_pack_id)
-        logger.info(f"Processing battery pack test: {battery_pack_id}")
 
         # Verify battery pack exists in database
         battery_pack, error = db_manager.verify_battery_pack_exists(battery_pack_id)
         if error:
-            logger.error(f"Battery pack verification failed: {error}")
             return create_response("ERROR", error, file_path)
 
-        # Parse the file
+        # Parse the file (skip JSON generation for faster processing)
+        parse_start = time.time()
         parse_result = parse_file_safely(file_path)
+        parse_time = time.time() - parse_start
+
         if parse_result["status"] == "ERROR":
-            logger.error(f"File parsing failed: {parse_result['message']}")
             return create_response("ERROR", parse_result["message"], file_path)
+
+        # Database operations with timing
+        db_start = time.time()
 
         # Insert test data into database
         test_id, error = db_manager.insert_test_data(
             battery_pack["id"], parse_result["data"]
         )
         if error:
-            logger.error(f"Database error during test data insertion: {error}")
             return create_response("ERROR", error, file_path)
 
-        logger.info(f"Test data inserted successfully with ID: {test_id}")
-
+        # Insert metadata tables (smaller datasets, can be done sequentially)
         unit_id, error = db_manager.insert_unit_data(test_id, parse_result["data"])
         if error:
-            logger.error(f"Database error during unit data insertion: {error}")
             return create_response("ERROR", error, file_path)
-
-        logger.info(f"Unit data inserted successfully with ID: {unit_id}")
 
         cycle_id, error = db_manager.insert_cycle_data(test_id, parse_result["data"])
         if error:
-            logger.error(f"Database error during cycle data insertion: {error}")
             return create_response("ERROR", error, file_path)
-
-        logger.info(f"Cycle data inserted successfully with ID: {cycle_id}")
 
         step_id, error = db_manager.insert_steps_data(test_id, parse_result["data"])
         if error:
-            logger.error(f"Database error during step data insertion: {error}")
             return create_response("ERROR", error, file_path)
 
-        logger.info(f"Step data inserted successfully with ID: {step_id}")
+        # Process large datasets with bulk operations
+        bulk_start = time.time()
 
+        # Insert records data (largest dataset - use optimized bulk insert)
         record_id, error = db_manager.insert_records_data(test_id, parse_result["data"])
         if error:
-            logger.error(f"Database error during record data insertion: {error}")
             return create_response("ERROR", error, file_path)
 
-        logger.info(f"Record data inserted successfully with ID: {record_id}")
-
+        # Insert logs data
         log_id, error = db_manager.insert_logs_data(test_id, parse_result["data"])
         if error:
-            logger.error(f"Database error during log data insertion: {error}")
             return create_response("ERROR", error, file_path)
 
-        logger.info(f"Log data inserted successfully with ID: {log_id}")
-
+        # Insert aux_dbc data (second largest dataset - use optimized bulk insert)
         aux_id, error = db_manager.insert_aux_dbc_data(test_id, parse_result["data"])
         if error:
-            logger.error(f"Database error during aux data insertion: {error}")
             return create_response("ERROR", error, file_path)
 
-        logger.info(f"Aux data inserted successfully with ID: {aux_id}")
+        bulk_time = time.time() - bulk_start
+        db_time = time.time() - db_start
+        total_time = time.time() - start_time
+
+        # Calculate data volumes for performance reporting
+        data = parse_result["data"]
+        record_count = len(data.get("record", []))
+        aux_count = len(data.get("aux_dbc", []))
+        total_inserts = record_count + aux_count
+
+        # Enhanced success message with performance metrics
+        success_message = (
+            f"{parse_result.get('message', 'Processing completed')} | "
+            f"Performance: Total={total_time:.2f}s, Parse={parse_time:.2f}s, "
+            f"DB={db_time:.2f}s, Bulk={bulk_time:.2f}s | "
+            f"Inserted: {total_inserts:,} records ({record_count:,} records + {aux_count:,} aux_dbc)"
+        )
 
         return create_response(
             "SUCCESS",
-            parse_result["message"],
+            success_message,
             file_path,
+            parse_result.get("json_path"),
+            {
+                "test_id": test_id,
+                "performance": {
+                    "total_time_seconds": round(total_time, 3),
+                    "parse_time_seconds": round(parse_time, 3),
+                    "database_time_seconds": round(db_time, 3),
+                    "bulk_insert_time_seconds": round(bulk_time, 3),
+                    "records_per_second": (
+                        round(total_inserts / total_time, 0) if total_time > 0 else 0
+                    ),
+                },
+                "data_summary": {
+                    "record_count": record_count,
+                    "aux_dbc_count": aux_count,
+                    "total_inserts": total_inserts,
+                },
+            },
         )
 
     except Exception as e:
-        logger.error(
-            f"Unexpected error in process_battery_pack_test: {e}", exc_info=True
-        )
         return create_response("ERROR", f"Processing failed: {str(e)}", file_path)
 
 
@@ -320,10 +366,6 @@ def main():
         file_path = InputValidator.sanitize_input(sys.argv[1])
         battery_pack_id = InputValidator.sanitize_input(sys.argv[2])
 
-        logger.info(
-            f"Starting main process with file: {file_path}, battery_pack_id: {battery_pack_id}"
-        )
-
         # Perform database health check
         db_manager = get_database_manager()
         health_status = db_manager.health_check()
@@ -335,26 +377,20 @@ def main():
                 file_path,
             )
             print(json.dumps(response, indent=0, ensure_ascii=False))
-            sys.exit(1)
-
-        logger.info(
-            f"Database health check passed in {health_status['response_time_ms']}ms"
-        )
+            sys.exit(0)
 
         # Process the battery pack test
         result = process_battery_pack_test(file_path, battery_pack_id, db_manager)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        print(json.dumps(result, indent=0, ensure_ascii=False))
         # Exit with appropriate code
         sys.exit(0 if result["status"] == "SUCCESS" else 1)
 
     except KeyboardInterrupt:
-        logger.info("Process interrupted by user")
         response = create_response("ERROR", "Process interrupted by user", None)
         print(json.dumps(response, indent=0, ensure_ascii=False))
         sys.exit(130)
 
     except Exception as e:
-        logger.error(f"Unexpected error in main function: {e}", exc_info=True)
         response = create_response("ERROR", f"System error: {str(e)}", None)
         print(json.dumps(response, indent=0, ensure_ascii=False))
         sys.exit(1)

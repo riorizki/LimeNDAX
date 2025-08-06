@@ -2,7 +2,6 @@
 Advanced database management utilities with connection pooling, error handling, and transactions.
 """
 
-import logging
 import time
 from contextlib import contextmanager
 from typing import Any, Dict, Generator, List, Optional, Tuple, Union
@@ -15,13 +14,6 @@ from mysql.connector.connection import MySQLConnection
 from mysql.connector.cursor import MySQLCursor
 
 from .config import DatabaseConfig, db_config
-
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
 
 
 class DatabaseError(Exception):
@@ -69,12 +61,8 @@ class DatabaseManager:
         try:
             pool_config = self.config.to_pool_dict()
             self._pool = pooling.MySQLConnectionPool(**pool_config)
-            logger.info(
-                f"Connection pool '{self.config.pool_name}' created with {self.config.pool_size} connections"
-            )
         except MySQLError as e:
             error_msg = f"Failed to create connection pool: {e}"
-            logger.error(error_msg)
             raise ConnectionPoolError(error_msg) from e
 
     def get_connection(self) -> MySQLConnection:
@@ -101,16 +89,13 @@ class DatabaseManager:
                 if not connection.is_connected():
                     connection.reconnect()
 
-                logger.debug(f"Connection obtained from pool (attempt {attempt + 1})")
                 return connection
 
             except MySQLError as e:
-                logger.warning(f"Connection attempt {attempt + 1} failed: {e}")
                 if attempt == max_retries - 1:
                     error_msg = (
                         f"Failed to get connection after {max_retries} attempts: {e}"
                     )
-                    logger.error(error_msg)
                     raise ConnectionPoolError(error_msg) from e
 
                 time.sleep(retry_delay)
@@ -127,15 +112,12 @@ class DatabaseManager:
         connection = None
         try:
             connection = self.get_connection()
-            logger.debug("Database connection acquired")
             yield connection
         except Exception as e:
-            logger.error(f"Error in connection context: {e}")
             raise
         finally:
             if connection and connection.is_connected():
                 connection.close()
-                logger.debug("Database connection released")
 
     @contextmanager
     def get_cursor_context(
@@ -160,20 +142,16 @@ class DatabaseManager:
                 connection_created = True
 
             cursor = connection.cursor(dictionary=dictionary, buffered=True)
-            logger.debug("Database cursor acquired")
             yield cursor
 
         except Exception as e:
-            logger.error(f"Error in cursor context: {e}")
             raise
         finally:
             if cursor:
                 cursor.close()
-                logger.debug("Database cursor closed")
 
             if connection_created and connection and connection.is_connected():
                 connection.close()
-                logger.debug("Database connection closed")
 
     @contextmanager
     def transaction_context(
@@ -199,28 +177,22 @@ class DatabaseManager:
             # Start transaction
             connection.start_transaction()
             transaction_started = True
-            logger.debug("Database transaction started")
 
             yield connection
 
             # Commit transaction
             connection.commit()
-            logger.debug("Database transaction committed")
 
         except Exception as e:
             if transaction_started and connection and connection.is_connected():
                 try:
                     connection.rollback()
-                    logger.warning(
-                        f"Database transaction rolled back due to error: {e}"
-                    )
                 except MySQLError as rollback_error:
-                    logger.error(f"Failed to rollback transaction: {rollback_error}")
+                    pass
             raise TransactionError(f"Transaction failed: {e}") from e
         finally:
             if connection_created and connection and connection.is_connected():
                 connection.close()
-                logger.debug("Database connection closed")
 
     def execute_query(
         self,
@@ -252,22 +224,14 @@ class DatabaseManager:
 
                     if fetch_one:
                         result = cursor.fetchone()
-                        logger.debug(
-                            f"Query executed, fetched one result: {bool(result)}"
-                        )
                         return result
                     elif fetch_all:
                         result = cursor.fetchall()
-                        logger.debug(f"Query executed, fetched {len(result)} results")
                         return result
                     else:
-                        logger.debug("Query executed, no fetch requested")
                         return None
 
         except MySQLError as e:
-            logger.error(f"Query execution failed: {e}")
-            logger.error(f"Query: {query}")
-            logger.error(f"Params: {params}")
             raise DatabaseError(f"Query execution failed: {e}") from e
 
     def execute_transaction(
@@ -299,15 +263,114 @@ class DatabaseManager:
                                 # Some queries don't return results (INSERT, UPDATE, DELETE)
                                 results.append(None)
 
-                    logger.info(
-                        f"Transaction completed successfully with {len(queries)} queries"
-                    )
-
             return results if return_results else None
 
         except Exception as e:
-            logger.error(f"Transaction failed: {e}")
             raise TransactionError(f"Transaction execution failed: {e}") from e
+
+    def execute_bulk_insert(self, query, data, batch_size=1000):
+        """Execute bulk insert with chunking to prevent MySQL timeout/memory issues."""
+        import time
+        from mysql.connector import errors as mysql_errors
+
+        if not data:
+            return
+
+        total_batches = (len(data) + batch_size - 1) // batch_size
+
+        connection = None
+        cursor = None
+
+        try:
+            # Get connection from pool
+            connection = self.get_connection()
+            cursor = connection.cursor()
+
+            # Optimize MySQL session for bulk operations (MUST be done before transaction)
+            original_autocommit = connection.autocommit
+            connection.autocommit = False
+
+            # Store original values to restore later
+            cursor.execute("SELECT @@unique_checks")
+            original_unique_checks = cursor.fetchone()[0]
+
+            cursor.execute("SELECT @@foreign_key_checks")
+            original_foreign_key_checks = cursor.fetchone()[0]
+
+            # Set optimization values (outside transaction)
+            cursor.execute("SET unique_checks = 0")
+            cursor.execute("SET foreign_key_checks = 0")
+
+            # Try to set sql_log_bin only if not in transaction and we have permission
+            try:
+                cursor.execute("SELECT @@sql_log_bin")
+                original_sql_log_bin = cursor.fetchone()[0]
+                cursor.execute("SET sql_log_bin = 0")
+                sql_log_bin_modified = True
+            except mysql_errors.Error:
+                # Skip sql_log_bin if we can't modify it (replication not used or no permission)
+                sql_log_bin_modified = False
+                original_sql_log_bin = None
+
+            # Start transaction after setting session variables
+            connection.start_transaction()
+
+            start_time = time.time()
+
+            for i in range(0, len(data), batch_size):
+                batch = data[i : i + batch_size]
+                batch_num = (i // batch_size) + 1
+
+                try:
+                    cursor.executemany(query, batch)
+
+                except mysql_errors.OperationalError as e:
+                    if "Lost connection" in str(e):
+                        # Get a new connection and cursor
+                        connection.close()
+                        connection = self.get_connection()
+                        cursor = connection.cursor()
+                        connection.start_transaction()
+                        # Retry the batch
+                        cursor.executemany(query, batch)
+                    else:
+                        raise
+
+                except Exception as e:
+                    raise
+
+            # Commit transaction
+            connection.commit()
+
+            total_time = time.time() - start_time
+
+        except Exception as e:
+            # Rollback transaction on error
+            if connection and connection.is_connected():
+                try:
+                    connection.rollback()
+                except:
+                    pass
+            raise
+        finally:
+            # Restore original settings
+            if cursor and connection and connection.is_connected():
+                try:
+                    cursor.execute(f"SET unique_checks = {original_unique_checks}")
+                    cursor.execute(
+                        f"SET foreign_key_checks = {original_foreign_key_checks}"
+                    )
+                    if sql_log_bin_modified and original_sql_log_bin is not None:
+                        cursor.execute(f"SET sql_log_bin = {original_sql_log_bin}")
+                    connection.autocommit = original_autocommit
+                except:
+                    pass
+
+            # Clean up resources
+            if cursor:
+                cursor.close()
+            if connection and connection.is_connected():
+                connection.close()
 
     def verify_battery_pack_exists(self, battery_pack_id):
         query = "SELECT * FROM battery_packs WHERE id = %s LIMIT 1"
@@ -320,7 +383,6 @@ class DatabaseManager:
             if not result:
                 return None, f"Battery pack ID not found: {battery_pack_id}"
 
-            logger.info(f"Battery pack {battery_pack_id} verified successfully")
             return result, None
 
         except DatabaseError:
@@ -329,7 +391,6 @@ class DatabaseManager:
                 f"Database error while verifying battery pack {battery_pack_id}",
             )
         except Exception as e:
-            logger.error(f"Error verifying battery pack {battery_pack_id}: {e}")
             return None, f"Failed to verify battery pack: {e}"
 
     def insert_test_data(self, battery_pack_id, test_data):
@@ -430,11 +491,9 @@ class DatabaseManager:
 
         try:
             self.execute_transaction(queries)
-            logger.info(f"Test data inserted successfully with ID: {test_id}")
             return test_id, None
 
         except Exception as e:
-            logger.error(f"Failed to insert test data: {e}")
             return None, f"Failed to insert test data: {e}"
 
     def insert_unit_data(self, test_id, unit_data):
@@ -496,11 +555,9 @@ class DatabaseManager:
 
         try:
             self.execute_transaction(queries)
-            logger.info(f"unit and plans inserted successfully with ID: {unit_id}")
             return test_id, None
 
         except Exception as e:
-            logger.error(f"Failed to insert unit and plans: {e}")
             return None, f"Failed to insert unit data: {e}"
 
     def insert_cycle_data(self, test_id, test_data):
@@ -543,11 +600,9 @@ class DatabaseManager:
 
         try:
             self.execute_transaction(queries)
-            logger.info(f"cycle data inserted successfully with ID: {test_id}")
             return test_id, None
 
         except Exception as e:
-            logger.error(f"Failed to insert cycle data: {e}")
             return None, f"Failed to insert cycle data: {e}"
 
     def insert_steps_data(self, test_id, test_data):
@@ -592,11 +647,9 @@ class DatabaseManager:
 
         try:
             self.execute_transaction(queries)
-            logger.info(f"step data inserted successfully with ID: {test_id}")
             return test_id, None
 
         except Exception as e:
-            logger.error(f"Failed to insert step data: {e}")
             return None, f"Failed to insert step data: {e}"
 
     def insert_records_data(self, test_id, test_data):
@@ -604,8 +657,6 @@ class DatabaseManager:
 
         # Extract test information and step plan
         records = test_data.get("record", [])
-
-        queries = []
 
         # insert step plan if it exists
         if records:
@@ -619,6 +670,8 @@ class DatabaseManager:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
 
+            # Prepare all data for bulk insert
+            bulk_data = []
             for e in records:
                 params = (
                     str(uuid.uuid4()),
@@ -636,15 +689,14 @@ class DatabaseManager:
                     current_time,
                     current_time,
                 )
-                queries.append((insert_query, params))
+                bulk_data.append(params)
 
         try:
-            self.execute_transaction(queries)
-            logger.info(f"records inserted successfully with ID: {test_id}")
+            if records:
+                self.execute_bulk_insert(insert_query, bulk_data)
             return test_id, None
 
         except Exception as e:
-            logger.error(f"Failed to insert records: {e}")
             return None, f"Failed to insert records: {e}"
 
     def insert_logs_data(self, test_id, test_data):
@@ -652,8 +704,6 @@ class DatabaseManager:
 
         # Extract test information and step plan
         logs = test_data.get("log", [])
-
-        queries = []
 
         # insert step plan if it exists
         if logs:
@@ -664,6 +714,8 @@ class DatabaseManager:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
 
+            # Prepare all data for bulk insert
+            bulk_data = []
             for e in logs:
                 params = (
                     str(uuid.uuid4()),
@@ -676,15 +728,14 @@ class DatabaseManager:
                     current_time,
                     current_time,
                 )
-                queries.append((insert_query, params))
+                bulk_data.append(params)
 
         try:
-            self.execute_transaction(queries)
-            logger.info(f"logs inserted successfully with ID: {test_id}")
+            if logs:
+                self.execute_bulk_insert(insert_query, bulk_data)
             return test_id, None
 
         except Exception as e:
-            logger.error(f"Failed to insert logs: {e}")
             return None, f"Failed to insert logs: {e}"
 
     def insert_aux_dbc_data(self, test_id, test_data):
@@ -692,8 +743,6 @@ class DatabaseManager:
 
         # Extract test information and step plan
         aux = test_data.get("aux_dbc", [])
-
-        queries = []
 
         # insert step plan if it exists
         if aux:
@@ -733,6 +782,8 @@ class DatabaseManager:
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
 
+            # Prepare all data for bulk insert
+            bulk_data = []
             for e in aux:
                 params = (
                     str(uuid.uuid4()),
@@ -871,15 +922,15 @@ class DatabaseManager:
                     current_time,
                     current_time,
                 )
-                queries.append((insert_query, params))
+                bulk_data.append(params)
 
         try:
-            self.execute_transaction(queries)
-            logger.info(f"aux inserted successfully with ID: {test_id}")
+            if aux:
+                # Use smaller batch size for aux_dbc due to large number of columns (130+ columns)
+                self.execute_bulk_insert(insert_query, bulk_data, batch_size=500)
             return test_id, None
 
         except Exception as e:
-            logger.error(f"Failed to insert aux: {e}")
             return None, f"Failed to insert aux: {e}"
 
     def health_check(self) -> Dict[str, Any]:
@@ -896,9 +947,7 @@ class DatabaseManager:
             result = self.execute_query("SELECT 1 as health_check", fetch_one=True)
 
             end_time = time.time()
-            response_time = round(
-                (end_time - start_time) * 1000, 2
-            )  # Convert to milliseconds
+            response_time = round((end_time - start_time) * 1000, 2)
 
             health_status = {
                 "status": "healthy" if result and result[0] == 1 else "unhealthy",
@@ -906,12 +955,9 @@ class DatabaseManager:
                 "pool_size": self.config.pool_size if self._pool else 0,
                 "timestamp": datetime.now().isoformat(),
             }
-
-            logger.info(f"Database health check completed: {health_status['status']}")
             return health_status
 
         except Exception as e:
-            logger.error(f"Database health check failed: {e}")
             return {
                 "status": "unhealthy",
                 "error": str(e),
@@ -925,9 +971,8 @@ class DatabaseManager:
                 # MySQL Connector/Python doesn't have a direct close method for pools
                 # The pool will be garbage collected
                 self._pool = None
-                logger.info("Connection pool closed")
             except Exception as e:
-                logger.error(f"Error closing connection pool: {e}")
+                pass
 
 
 # Global database manager instance
@@ -952,7 +997,4 @@ def setup_database_connection() -> MySQLConnection:
     Returns:
         MySQLConnection: Database connection.
     """
-    logger.warning(
-        "setup_database_connection() is deprecated. Use DatabaseManager instead."
-    )
     return db_manager.get_connection()

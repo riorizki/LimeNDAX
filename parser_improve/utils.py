@@ -6,13 +6,13 @@ Centralized header normalization and common DataFrame operations.
 import pandas as pd
 import re
 import json
+import warnings
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Suppress openpyxl warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 
 class HeaderNormalizer:
@@ -151,10 +151,8 @@ class ExcelLoader:
             sheets = pd.read_excel(
                 file_path, sheet_name=None, engine="openpyxl", header=None
             )
-            logger.info(f"Successfully loaded {len(sheets)} sheets from {file_path}")
             return sheets
         except Exception as e:
-            logger.error(f"Failed to load workbook {file_path}: {e}")
             return {}
 
 
