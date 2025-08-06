@@ -261,6 +261,34 @@ def process_battery_pack_test(
 
         logger.info(f"Cycle data inserted successfully with ID: {cycle_id}")
 
+        step_id, error = db_manager.insert_steps_data(test_id, parse_result["data"])
+        if error:
+            logger.error(f"Database error during step data insertion: {error}")
+            return create_response("ERROR", error, file_path)
+
+        logger.info(f"Step data inserted successfully with ID: {step_id}")
+
+        record_id, error = db_manager.insert_records_data(test_id, parse_result["data"])
+        if error:
+            logger.error(f"Database error during record data insertion: {error}")
+            return create_response("ERROR", error, file_path)
+
+        logger.info(f"Record data inserted successfully with ID: {record_id}")
+
+        log_id, error = db_manager.insert_logs_data(test_id, parse_result["data"])
+        if error:
+            logger.error(f"Database error during log data insertion: {error}")
+            return create_response("ERROR", error, file_path)
+
+        logger.info(f"Log data inserted successfully with ID: {log_id}")
+
+        aux_id, error = db_manager.insert_aux_dbc_data(test_id, parse_result["data"])
+        if error:
+            logger.error(f"Database error during aux data insertion: {error}")
+            return create_response("ERROR", error, file_path)
+
+        logger.info(f"Aux data inserted successfully with ID: {aux_id}")
+
         return create_response(
             "SUCCESS",
             parse_result["message"],

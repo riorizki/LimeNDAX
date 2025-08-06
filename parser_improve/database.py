@@ -550,6 +550,338 @@ class DatabaseManager:
             logger.error(f"Failed to insert cycle data: {e}")
             return None, f"Failed to insert cycle data: {e}"
 
+    def insert_steps_data(self, test_id, test_data):
+        current_time = datetime.now().isoformat()
+
+        # Extract test information and step plan
+        steps = test_data.get("step", [])
+
+        queries = []
+
+        # insert step plan if it exists
+        if steps:
+            steps_insert_query = """
+                INSERT INTO battery_pack_cycle_csv_test_steps (
+                  id, cycle_index, step_index, step_number,
+                  step_type, step_time, oneset_date, end_date,
+                  capacity_ah, energy_wh, oneset_volt_v, end_voltage_v,
+                  battery_pack_cycle_csv_test_id, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+
+            for step in steps:
+                step_params = (
+                    str(uuid.uuid4()),
+                    step.get("cycle_index"),
+                    step.get("step_index"),
+                    step.get("step_number"),
+                    step.get("step_type"),
+                    step.get("step_time"),
+                    step.get("oneset_date"),
+                    step.get("end_date"),
+                    step.get("capacity_ah"),
+                    step.get("energy_wh"),
+                    step.get("oneset_volt_v"),
+                    step.get("end_voltage_v"),
+                    test_id,
+                    current_time,
+                    current_time,
+                )
+                queries.append((steps_insert_query, step_params))
+
+        try:
+            self.execute_transaction(queries)
+            logger.info(f"step data inserted successfully with ID: {test_id}")
+            return test_id, None
+
+        except Exception as e:
+            logger.error(f"Failed to insert step data: {e}")
+            return None, f"Failed to insert step data: {e}"
+
+    def insert_records_data(self, test_id, test_data):
+        current_time = datetime.now().isoformat()
+
+        # Extract test information and step plan
+        records = test_data.get("record", [])
+
+        queries = []
+
+        # insert step plan if it exists
+        if records:
+            insert_query = """
+                INSERT INTO battery_pack_cycle_csv_test_records (
+                  id, datapoint, step_type, time, total_time,
+                  current_a, voltage_v, capacity_ah, energy_wh,
+                  date, power_w, battery_pack_cycle_csv_test_id,
+                  created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+
+            for e in records:
+                params = (
+                    str(uuid.uuid4()),
+                    e.get("datapoint"),
+                    e.get("step_type"),
+                    e.get("time"),
+                    e.get("total_time"),
+                    e.get("current_a"),
+                    e.get("voltage_v"),
+                    e.get("capacity_ah"),
+                    e.get("energy_wh"),
+                    e.get("date"),
+                    e.get("power_w"),
+                    test_id,
+                    current_time,
+                    current_time,
+                )
+                queries.append((insert_query, params))
+
+        try:
+            self.execute_transaction(queries)
+            logger.info(f"records inserted successfully with ID: {test_id}")
+            return test_id, None
+
+        except Exception as e:
+            logger.error(f"Failed to insert records: {e}")
+            return None, f"Failed to insert records: {e}"
+
+    def insert_logs_data(self, test_id, test_data):
+        current_time = datetime.now().isoformat()
+
+        # Extract test information and step plan
+        logs = test_data.get("log", [])
+
+        queries = []
+
+        # insert step plan if it exists
+        if logs:
+            insert_query = """
+                INSERT INTO battery_pack_cycle_csv_test_logs (
+                  id, datapoint, time, class, event, detailed_log_description, battery_pack_cycle_csv_test_id, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+
+            for e in logs:
+                params = (
+                    str(uuid.uuid4()),
+                    e.get("datapoint"),
+                    e.get("time"),
+                    e.get("class"),
+                    e.get("event"),
+                    e.get("detailed_log_description"),
+                    test_id,
+                    current_time,
+                    current_time,
+                )
+                queries.append((insert_query, params))
+
+        try:
+            self.execute_transaction(queries)
+            logger.info(f"logs inserted successfully with ID: {test_id}")
+            return test_id, None
+
+        except Exception as e:
+            logger.error(f"Failed to insert logs: {e}")
+            return None, f"Failed to insert logs: {e}"
+
+    def insert_aux_dbc_data(self, test_id, test_data):
+        current_time = datetime.now().isoformat()
+
+        # Extract test information and step plan
+        aux = test_data.get("aux_dbc", [])
+
+        queries = []
+
+        # insert step plan if it exists
+        if aux:
+            insert_query = """
+                INSERT INTO battery_pack_cycle_csv_test_aux_dbcs (
+                  id, datapoint, date, obc_error5, obc_error4, obc_error3, obc_error2, obc_error1,
+                  obc_temperature, obc_present_votage_v, obc_present_current_a, obc_input_voltage_v,
+                  obc_activation, fault_code, warning_code, soc_pct, bms_obc_en, max_chg_volt_v_v,
+                  max_chg_current_a_a, balancing_circuit_temp, mos_temp, bms_temp_8_c, bms_temp_7_c,
+                  bms_temp_4_c, bms_temp_3_c, bms_temp_1_c, bms_temp_2_c, cell_volt_mv_20_mv, cell_volt_mv_19_mv,
+                  cell_volt_mv_18_mv, cell_volt_mv_17_mv, cell_volt_mv_16_mv, cell_volt_mv_15_mv, cell_volt_mv_14_mv,
+                  cell_volt_mv_13_mv, cell_volt_mv_9_mv, cell_volt_mv_12_mv, cell_volt_mv_11_mv,
+                  cell_volt_mv_10_mv, cell_volt_mv_8_mv, cell_volt_mv_7_mv, cell_volt_mv_6_mv,
+                  cell_volt_mv_5_mv, cell_volt_mv_4_mv, cell_volt_mv_3_mv, cell_volt_mv_2_mv,
+                  cell_volt_mv_1_mv, bms_warn_22, bms_warn_21, bms_warn_20, bms_warn_19, bms_warn_18,
+                  bms_warn_17, bms_warn_16, bms_warn_15, bms_warn_14, bms_warn_13, bms_warn_12, bms_warn_11,
+                  bms_warn_10, bms_warn_9, bms_warn_8, bms_warn_7, bms_warn_6, bms_warn_5, bms_warn_4,
+                  bms_warn_3, bms_warn_2, bms_warn_1, bms_err_22, bms_err_21, bms_err_20, bms_err_19,
+                  bms_err_18, bms_err_17, bms_err_16, bms_err_15, bms_err_14, bms_err_13, bms_err_12,
+                  bms_err_11, bms_err_10, bms_err_9, bms_err_8, bms_err_7, bms_err_6, bms_err_5, bms_err_4,
+                  bms_err_3, bms_err_2, bms_err_1, err_lvl, cycles, ascii_coded_hex_revision,
+                  ascii_coded_hex_minjorversion, ascii_coded_hex_majorversion, bms_serial_num_17,
+                  bms_serial_num_16, bms_serial_num_15, bms_serial_num_14, bms_serial_num_13,
+                  bms_serial_num_12, bms_serial_num_11, bms_serial_num_10, bms_serial_num_9, bms_serial_num_8,
+                  bms_serial_num_1, bms_serial_num_7, bms_serial_num_6, bms_serial_num_5, bms_serial_num_4,
+                  bms_serial_num_3, bms_serial_num_2, lowest_cell_volt_mv_mv, highest_cell_volt_mv_mv,
+                  max_regen_current_a_a, max_dschg_current_a_a, dcdc_mos_status, bms_current_a_a,
+                  bms_alive_counter, bms_volt_v_v, bms_soh_pct, bms_soc_pct, bms_charger_bool,
+                  chg_relay_bool, dschg_relay_bool, pre_dschg_bool, bms_status, dcdc_en, bms_charge_en,
+                  disable_insulation_detection_en, bms_discharge_en, battery_pack_cycle_csv_test_id, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+
+            for e in aux:
+                params = (
+                    str(uuid.uuid4()),
+                    e.get("datapoint"),
+                    e.get("date"),
+                    e.get("obc_error5"),
+                    e.get("obc_error4"),
+                    e.get("obc_error3"),
+                    e.get("obc_error2"),
+                    e.get("obc_error1"),
+                    e.get("obc_temperature"),
+                    e.get("obc_present_votage_v"),
+                    e.get("obc_present_current_a"),
+                    e.get("obc_input_voltage_v"),
+                    e.get("obc_activation"),
+                    e.get("fault_code"),
+                    e.get("warning_code"),
+                    e.get("soc_pct"),
+                    e.get("bms_obc_en"),
+                    e.get("max_chg_volt_v_v"),
+                    e.get("max_chg_current_a_a"),
+                    e.get("balancing_circuit_temp"),
+                    e.get("mos_temp"),
+                    e.get("bms_temp_8_c"),
+                    e.get("bms_temp_7_c"),
+                    e.get("bms_temp_4_c"),
+                    e.get("bms_temp_3_c"),
+                    e.get("bms_temp_1_c"),
+                    e.get("bms_temp_2_c"),
+                    e.get("cell_volt_mv_20_mv"),
+                    e.get("cell_volt_mv_19_mv"),
+                    e.get("cell_volt_mv_18_mv"),
+                    e.get("cell_volt_mv_17_mv"),
+                    e.get("cell_volt_mv_16_mv"),
+                    e.get("cell_volt_mv_15_mv"),
+                    e.get("cell_volt_mv_14_mv"),
+                    e.get("cell_volt_mv_13_mv"),
+                    e.get("cell_volt_mv_9_mv"),
+                    e.get("cell_volt_mv_12_mv"),
+                    e.get("cell_volt_mv_11_mv"),
+                    e.get("cell_volt_mv_10_mv"),
+                    e.get("cell_volt_mv_8_mv"),
+                    e.get("cell_volt_mv_7_mv"),
+                    e.get("cell_volt_mv_6_mv"),
+                    e.get("cell_volt_mv_5_mv"),
+                    e.get("cell_volt_mv_4_mv"),
+                    e.get("cell_volt_mv_3_mv"),
+                    e.get("cell_volt_mv_2_mv"),
+                    e.get("cell_volt_mv_1_mv"),
+                    e.get("bms_warn_22"),
+                    e.get("bms_warn_21"),
+                    e.get("bms_warn_20"),
+                    e.get("bms_warn_19"),
+                    e.get("bms_warn_18"),
+                    e.get("bms_warn_17"),
+                    e.get("bms_warn_16"),
+                    e.get("bms_warn_15"),
+                    e.get("bms_warn_14"),
+                    e.get("bms_warn_13"),
+                    e.get("bms_warn_12"),
+                    e.get("bms_warn_11"),
+                    e.get("bms_warn_10"),
+                    e.get("bms_warn_9"),
+                    e.get("bms_warn_8"),
+                    e.get("bms_warn_7"),
+                    e.get("bms_warn_6"),
+                    e.get("bms_warn_5"),
+                    e.get("bms_warn_4"),
+                    e.get("bms_warn_3"),
+                    e.get("bms_warn_2"),
+                    e.get("bms_warn_1"),
+                    e.get("bms_err_22"),
+                    e.get("bms_err_21"),
+                    e.get("bms_err_20"),
+                    e.get("bms_err_19"),
+                    e.get("bms_err_18"),
+                    e.get("bms_err_17"),
+                    e.get("bms_err_16"),
+                    e.get("bms_err_15"),
+                    e.get("bms_err_14"),
+                    e.get("bms_err_13"),
+                    e.get("bms_err_12"),
+                    e.get("bms_err_11"),
+                    e.get("bms_err_10"),
+                    e.get("bms_err_9"),
+                    e.get("bms_err_8"),
+                    e.get("bms_err_7"),
+                    e.get("bms_err_6"),
+                    e.get("bms_err_5"),
+                    e.get("bms_err_4"),
+                    e.get("bms_err_3"),
+                    e.get("bms_err_2"),
+                    e.get("bms_err_1"),
+                    e.get("err_lvl"),
+                    e.get("cycles"),
+                    e.get("ascii_coded_hex_revision"),
+                    e.get("ascii_coded_hex_minjorversion"),
+                    e.get("ascii_coded_hex_majorversion"),
+                    e.get("bms_serial_num_17"),
+                    e.get("bms_serial_num_16"),
+                    e.get("bms_serial_num_15"),
+                    e.get("bms_serial_num_14"),
+                    e.get("bms_serial_num_13"),
+                    e.get("bms_serial_num_12"),
+                    e.get("bms_serial_num_11"),
+                    e.get("bms_serial_num_10"),
+                    e.get("bms_serial_num_9"),
+                    e.get("bms_serial_num_8"),
+                    e.get("bms_serial_num_1"),
+                    e.get("bms_serial_num_7"),
+                    e.get("bms_serial_num_6"),
+                    e.get("bms_serial_num_5"),
+                    e.get("bms_serial_num_4"),
+                    e.get("bms_serial_num_3"),
+                    e.get("bms_serial_num_2"),
+                    e.get("lowest_cell_volt_mv_mv"),
+                    e.get("highest_cell_volt_mv_mv"),
+                    e.get("max_regen_current_a_a"),
+                    e.get("max_dschg_current_a_a"),
+                    e.get("dcdc_mos_status"),
+                    e.get("bms_current_a_a"),
+                    e.get("bms_alive_counter"),
+                    e.get("bms_volt_v_v"),
+                    e.get("bms_soh_pct"),
+                    e.get("bms_soc_pct"),
+                    e.get("bms_charger_bool"),
+                    e.get("chg_relay_bool"),
+                    e.get("dschg_relay_bool"),
+                    e.get("pre_dschg_bool"),
+                    e.get("bms_status"),
+                    e.get("dcdc_en"),
+                    e.get("bms_charge_en"),
+                    e.get("disable_insulation_detection_en"),
+                    e.get("bms_discharge_en"),
+                    test_id,
+                    current_time,
+                    current_time,
+                )
+                queries.append((insert_query, params))
+
+        try:
+            self.execute_transaction(queries)
+            logger.info(f"aux inserted successfully with ID: {test_id}")
+            return test_id, None
+
+        except Exception as e:
+            logger.error(f"Failed to insert aux: {e}")
+            return None, f"Failed to insert aux: {e}"
+
     def health_check(self) -> Dict[str, Any]:
         """
         Perform database health check.
