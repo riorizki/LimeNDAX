@@ -1,15 +1,6 @@
 import json
 from tabulate import tabulate
-from datetime import datetime
-import re
-
-
-def summarize_list(lst, max_len=5):
-    """Summarize a long list for table display."""
-    if len(lst) > max_len:
-        return f"{lst[:max_len]} ..."
-    else:
-        return str(lst)
+from datetime import datetime, timedelta
 
 
 def parse_dt(s):
@@ -20,6 +11,38 @@ def parse_dt(s):
             return datetime.strptime(s, "%Y-%m-%d %H:%M")
         except Exception:
             return None
+
+
+def parse_duration(duration_str):
+    try:
+        parts = [int(p) for p in duration_str.split(":")]
+        if len(parts) == 3:
+            h, m, s = parts
+        elif len(parts) == 2:
+            h, m, s = 0, *parts
+        else:
+            return None
+        return h * 3600 + m * 60 + s
+    except:
+        return None
+
+
+def match_record_by_time(records, target_dt, tolerance=timedelta(seconds=1)):
+    best_row = None
+    best_delta = None
+    for row in records:
+        dt = row.get("date") or row.get("datetime")
+        if not dt:
+            continue
+        row_dt = parse_dt(dt)
+        if not row_dt:
+            continue
+        delta = abs((row_dt - target_dt).total_seconds())
+        if delta <= tolerance.total_seconds():
+            if best_delta is None or delta < best_delta:
+                best_delta = delta
+                best_row = row
+    return best_row
 
 
 def get_aux_in_window(aux, start, end):
@@ -38,172 +61,252 @@ def get_aux_in_window(aux, start, end):
     return selected
 
 
-def check_discharge_step(step, aux_all):
-    idx = step.get("step_index", "")
-    name = step.get("step_type", "")
-    result_table = [["step", "", "", f"Step {idx} - {name}"]]
-    aux = get_aux_in_window(
-        aux_all, step.get("oneset_date", ""), step.get("end_date", "")
-    )
+def find_cc_dchg_step(step_list, target_seconds=3600):
+    best_step = None
+    best_diff = float("inf")
+    for step in step_list:
+        typ = step.get("step_type", "").replace("_", " ").lower()
+        if typ == "cc dchg":
+            duration = parse_duration(step.get("step_time", ""))
+            if duration is None:
+                continue
+            diff = abs(duration - target_seconds)
+            if diff < best_diff:
+                best_step = step
+                best_diff = diff
+    return best_step
 
-    # 1. Error <= 6% (Current sensor accuracy)
-    target_current = float(step.get("current_a", 0) or 0)
-    measured_currents = [
-        float(row.get("bms_current_a_a", 0) or 0)
-        for row in aux
-        if "bms_current_a_a" in row
-    ]
-    if measured_currents and target_current != 0:
-        max_error = max(
+
+def check_current_sensor_accuracy(step, aux_all, records):
+    result_table = [["check", "RESULT", "DETAIL", "REASON"]]
+
+    # Get first 180 seconds window for this step
+    step_start = parse_dt(step.get("oneset_date", ""))
+    aux = []
+    if step_start:
+        step_180s_end = step_start + timedelta(seconds=180)
+        for row in aux_all:
+            dt = row.get("date") or row.get("datetime")
+            if not dt:
+                continue
+            dt = parse_dt(dt)
+            if dt and step_start <= dt <= step_180s_end:
+                aux.append(row)
+
+    # Compute BMS and record errors
+    errors = []
+    record_errors = []
+    for row in aux:
+        dt = row.get("date") or row.get("datetime")
+        if not dt:
+            continue
+        row_dt = parse_dt(dt)
+        if not row_dt or not step_start:
+            continue
+        seconds_from_start = (row_dt - step_start).total_seconds()
+        set_current = min(int(seconds_from_start // 3) * 10, 100)
+        try:
+            meas_current = float(row.get("bms_current_a_a", 0))
+            if abs(set_current) > 0.5:
+                error_pct = abs(meas_current - set_current) / abs(set_current) * 100
+                errors.append(error_pct)
+        except Exception:
+            continue
+
+        # Compare to records current
+        rec = match_record_by_time(records, row_dt)
+        record_current = float(rec["current_a"]) if rec and "current_a" in rec else None
+        if record_current is not None and abs(set_current) > 0.5:
+            rec_error_pct = abs(record_current - set_current) / abs(set_current) * 100
+            record_errors.append(rec_error_pct)
+        elif abs(set_current) > 0.5:
+            record_errors.append(float("nan"))
+
+    max_error = max(errors) if errors else None
+    rec_valid_errors = [v for v in record_errors if v == v]  # filter out nan
+    max_rec_error = max(rec_valid_errors) if rec_valid_errors else None
+
+    # 1. BMS error
+    if max_error is not None and max_error <= 6.0:
+        result_table.append(
             [
-                abs(c - target_current) / abs(target_current) * 100
-                for c in measured_currents
+                "current_error",
+                "PASS",
+                f"Max error = {max_error:.2f}%",
+                "All errors ≤ 6%",
             ]
         )
-        if max_error <= 6:
+    elif max_error is not None:
+        result_table.append(
+            ["current_error", "NG", f"Max error = {max_error:.2f}%", "Error > 6% found"]
+        )
+    else:
+        result_table.append(
+            ["current_error", "NG", "No data to check", "No valid set/current"]
+        )
+
+    # 2. Record error (added section, always after BMS error)
+    if max_rec_error is not None and max_rec_error <= 6.0:
+        result_table.append(
+            [
+                "record_current_error",
+                "PASS",
+                f"Max error = {max_rec_error:.2f}%",
+                "All errors ≤ 6%",
+            ]
+        )
+    elif max_rec_error is not None:
+        result_table.append(
+            [
+                "record_current_error",
+                "NG",
+                f"Max error = {max_rec_error:.2f}%",
+                "Error > 6% found",
+            ]
+        )
+    else:
+        result_table.append(
+            [
+                "record_current_error",
+                "NG",
+                "No data to check",
+                "No valid set/current",
+            ]
+        )
+
+    # 3. Current reading = 0 for first 3s
+    first3s_dt = step_start + timedelta(seconds=3) if step_start else None
+    current_nonzero = False
+    for row in aux:
+        dt = row.get("date") or row.get("datetime")
+        if not dt:
+            continue
+        dt = parse_dt(dt)
+        if dt and dt <= first3s_dt:
+            try:
+                curr = float(row.get("bms_current_a_a", 0))
+                if abs(curr) > 0.1:
+                    current_nonzero = True
+                    break
+            except Exception:
+                continue
+    if not aux:
+        result_table.append(
+            ["current_zero_first3s", "NG", "No aux data", "No data to check"]
+        )
+    elif not current_nonzero:
+        result_table.append(
+            ["current_zero_first3s", "PASS", "Current=0 for first 3s", "OK"]
+        )
+    else:
+        result_table.append(
+            [
+                "current_zero_first3s",
+                "NG",
+                "Nonzero current in first 3s",
+                "Should be zero",
+            ]
+        )
+
+    # 4. String voltage delta (TBD - just report for review)
+    cell_vs_end = []
+    if aux:
+        for k, v in aux[-1].items():
+            if k.startswith("cell_volt_mv_") and k.endswith("_mv"):
+                try:
+                    cell_vs_end.append(float(v) / 1000.0)
+                except Exception:
+                    pass
+        if cell_vs_end:
+            spread = (max(cell_vs_end) - min(cell_vs_end)) * 1000  # mV
             result_table.append(
-                ["current_error", "PASS", f"max error={max_error:.2f}%", ""]
+                [
+                    "cell_voltage_spread_end",
+                    "INFO",
+                    f"{min(cell_vs_end):.4f}V ~ {max(cell_vs_end):.4f}V (Δ={spread:.2f}mV)",
+                    "For review (no spec limit in matrix)",
+                ]
             )
         else:
             result_table.append(
-                ["current_error", "FAIL", f"max error={max_error:.2f}%", ""]
+                [
+                    "cell_voltage_spread_end",
+                    "INFO",
+                    "No cell voltages",
+                    "No data to check",
+                ]
             )
-    elif not measured_currents:
-        result_table.append(
-            ["current_error", "FAIL", "No valid BMS current readings found", ""]
-        )
-    else:
-        result_table.append(["current_error", "FAIL", "Target current is 0", ""])
-
-    # 2. Current reading = 0 for first 3 seconds in this step
-    first_dt = parse_dt(step.get("oneset_date", ""))
-    zero_current = True
-    start_currents = []
-    for row in aux:
-        row_dt = parse_dt(row.get("date") or row.get("datetime"))
-        if not row_dt or not first_dt:
-            continue
-        delta_s = (row_dt - first_dt).total_seconds()
-        if 0 <= delta_s <= 3:
-            try:
-                current = float(row.get("bms_current_a_a", 0) or 0)
-                start_currents.append(current)
-                if abs(current) > 0.1:
-                    zero_current = False
-            except:
-                continue
-    summary_currents = summarize_list(start_currents)
-    if not start_currents:
-        result_table.append(
-            ["zero_start_current", "FAIL", "No data in first 3 seconds", ""]
-        )
-    elif zero_current:
-        result_table.append(["zero_start_current", "PASS", "0A in first 3 seconds", ""])
     else:
         result_table.append(
-            ["zero_start_current", "FAIL", f"Start currents={summary_currents}", ""]
+            ["cell_voltage_spread_end", "INFO", "No aux data", "No data to check"]
         )
 
-    # 3. String voltage delta (<20mV as an example)
-    cell_volt_keys = (
-        [k for k in aux[0].keys() if "cell_volt" in k.lower()] if aux else []
-    )
-    string_voltages = []
-    for row in aux:
-        for k in cell_volt_keys:
+    # 5. 0 <= temp change in each probe ≤ 2°C over window (use bms_temp_1~4_c)
+    temp_fields = [f"bms_temp_{i}_c" for i in range(1, 5)]
+    temp_changes = []
+    if aux:
+        for k in temp_fields:
             try:
-                val = float(row[k])
-                # plausible: 0 < v < 6000 (mV)
-                if 0 < val < 6000:
-                    string_voltages.append(val)
+                t_start = float(aux[0].get(k, -100))
+                t_end = float(aux[-1].get(k, -100))
+                if all([-30 < t < 90 and t != -40 for t in [t_start, t_end]]):
+                    temp_changes.append((k, t_end - t_start))
             except Exception:
                 pass
-    if string_voltages:
-        spread = max(string_voltages) - min(string_voltages)
-        if spread < 20:
+        ngs = []
+        for k, delta in temp_changes:
+            if not (0 <= delta <= 2):
+                ngs.append((k, delta))
+        if not temp_changes:
             result_table.append(
-                ["string_voltage_delta", "PASS", f"spread={spread:.1f}mV", ""]
+                ["temp_probe_change", "NG", "No temp data", "No data to check"]
+            )
+        elif not ngs:
+            result_table.append(
+                [
+                    "temp_probe_change",
+                    "PASS",
+                    ", ".join([f"{k}: Δ={d:.2f}°C" for k, d in temp_changes]),
+                    "All probe change 0~2°C",
+                ]
             )
         else:
             result_table.append(
-                ["string_voltage_delta", "FAIL", f"spread={spread:.1f}mV", ""]
+                [
+                    "temp_probe_change",
+                    "NG",
+                    ", ".join([f"{k}: Δ={d:.2f}°C" for k, d in ngs]),
+                    "At least one probe change not in 0~2°C",
+                ]
             )
     else:
-        result_table.append(["string_voltage_delta", "FAIL", "No cell voltages", ""])
-
-    # 4. No BMS errors, current within 1% setpoint
-    bms_err_cols = [k for k in aux[0].keys() if "bms_err" in k.lower()] if aux else []
-    bms_error_found = any(
-        float(row[k]) != 0
-        for row in aux
-        for k in bms_err_cols
-        if k in row and row[k] not in ("", None)
-    )
-    current_within_1pct = True
-    if measured_currents and target_current != 0:
-        for c in measured_currents:
-            if abs(c - target_current) / abs(target_current) > 0.01:
-                current_within_1pct = False
-                break
-    if not bms_error_found and current_within_1pct:
         result_table.append(
-            [
-                "bms_current_accuracy",
-                "PASS",
-                "No BMS errors and all current within 1%",
-                "",
-            ]
-        )
-    else:
-        reason = []
-        if bms_error_found:
-            reason.append("BMS error found")
-        if not current_within_1pct:
-            reason.append("Current out of 1% band")
-        result_table.append(["bms_current_accuracy", "FAIL", ", ".join(reason), ""])
-
-    # 5. Temp probes: 0 <= temp change <= 2C for each probe
-    temp_keys = ["bms_temp_1_c", "bms_temp_2_c", "bms_temp_3_c", "bms_temp_4_c"]
-    temp_deltas = []
-    if aux:
-        start = aux[0]
-        end = aux[-1]
-        for k in temp_keys:
-            try:
-                delta = float(end[k]) - float(start[k])
-                temp_deltas.append(delta)
-            except Exception:
-                temp_deltas.append(None)
-    temp_deltas_summary = summarize_list(temp_deltas)
-    temp_pass = all((d is not None and 0 <= d <= 2) for d in temp_deltas)
-    if temp_pass:
-        result_table.append(
-            ["probe_temp_delta", "PASS", f"deltas={temp_deltas_summary}", ""]
-        )
-    else:
-        result_table.append(
-            ["probe_temp_delta", "FAIL", f"deltas={temp_deltas_summary}", ""]
+            ["temp_probe_change", "NG", "No aux data", "No data to check"]
         )
 
     return result_table
 
 
+# ================= MAIN FOR STEP 4 (first 180s discharge) ==================
 def main(json_path):
     with open(json_path) as f:
         data = json.load(f)
-
     step_list = data["data"].get("step", [])
     aux = data["data"].get("auxDBC") or data["data"].get("aux_dbc", [])
+    records = data["data"].get("records", [])
 
-    dchg_pattern = re.compile(r"dchg|discharge", re.IGNORECASE)
-    for step in step_list:
-        if dchg_pattern.search(step.get("step_type", "")):
-            result = check_discharge_step(step, aux)
-            print(tabulate(result, headers="firstrow", tablefmt="github"))
-            break
+    cc_dchg_step = find_cc_dchg_step(step_list)
+    if cc_dchg_step:
+        print(
+            f"\n🔍 Checking step: {cc_dchg_step.get('step_name', '')} | Duration: {cc_dchg_step.get('step_time', '')} (First 180s only)"
+        )
+        result = check_current_sensor_accuracy(cc_dchg_step, aux, records)
+        print(tabulate(result, headers="firstrow", tablefmt="github"))
     else:
-        print("No 'Discharge' step found in parsed JSON.")
+        print("No suitable CC DChg step found.")
 
 
 if __name__ == "__main__":
-    main("/Users/rio.wijaya/Downloads/LimeNDAX/parsed_output.json")
+    main(
+        "/Users/riorizki/development/repos/ION-Mobility-Team/mes/LimeNDAX/result/LG_2_EOL_test_15-1-4-20250428125222_response.json"
+    )

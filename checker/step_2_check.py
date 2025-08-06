@@ -1,9 +1,6 @@
-# checker/step_2_charge.py
-
 import json
 from tabulate import tabulate
 from datetime import datetime
-import re
 
 
 def parse_dt(s):
@@ -14,6 +11,21 @@ def parse_dt(s):
             return datetime.strptime(s, "%Y-%m-%d %H:%M")
         except Exception:
             return None
+
+
+def parse_duration(duration_str):
+    """Convert hh:mm:ss or mm:ss to total seconds."""
+    try:
+        parts = [int(p) for p in duration_str.split(":")]
+        if len(parts) == 3:
+            h, m, s = parts
+        elif len(parts) == 2:
+            h, m, s = 0, *parts
+        else:
+            return None
+        return h * 3600 + m * 60 + s
+    except:
+        return None
 
 
 def get_aux_in_window(aux, start, end):
@@ -32,119 +44,226 @@ def get_aux_in_window(aux, start, end):
     return selected
 
 
-def check_charge_step(step, aux_all):
-    idx = step.get("step_index", "")
-    name = step.get("step_name", "")
-    result_table = [["step", "", "", f"Step {idx} - {name}"]]
+def find_cccv_step(step_list, target_seconds=10800):
+    # Find CCCV steps and pick the closest to 3 hours
+    best_step = None
+    best_diff = float("inf")
+    for step in step_list:
+        typ = step.get("step_type", "").replace("_", " ").lower()
+        if typ == "cccv chg":
+            duration = parse_duration(step.get("step_time", ""))
+            if duration is None:
+                continue
+            diff = abs(duration - target_seconds)
+            if diff < best_diff:
+                best_step = step
+                best_diff = diff
+    return best_step
 
+
+def check_charge_step(step, aux_all, cycle):
     aux = get_aux_in_window(
         aux_all, step.get("oneset_date", ""), step.get("end_date", "")
     )
 
-    # 1. No BMS errors reported
-    bms_err_cols = [k for k in aux[0].keys() if "bms_err" in k.lower()] if aux else []
-    bms_error_found = any(
-        float(row[k]) != 0
-        for row in aux
-        for k in bms_err_cols
-        if k in row and row[k] not in ("", None)
-    )
-    if bms_error_found:
-        result_table.append(["bms_error", "FAIL", "BMS error reported", ""])
-    else:
-        result_table.append(["bms_error", "PASS", "No BMS errors", ""])
+    result_table = [["check", "RESULT", "DETAIL", "REASON"]]
 
-    # 2. All reported temp between 20-50C (only the 4 bms_temp_x_c as requested)
-    temp_keys = ["bms_temp_1_c", "bms_temp_2_c", "bms_temp_3_c", "bms_temp_4_c"]
-    temps = []
+    # 1. No BMS errors during charging (all bms_err_1~22 == 0)
+    error_fields = [f"bms_err_{i}" for i in range(1, 23)]
+    error_found = False
     for row in aux:
-        for k in temp_keys:
-            try:
-                val = float(row[k])
-                temps.append(val)
-            except Exception:
-                pass
-    if temps and all(20 <= t <= 50 for t in temps):
-        result_table.append(["temp_range", "PASS", f"All 20–50°C", ""])
-    else:
-        failtemps = [t for t in temps if t < 20 or t > 50]
-        result_table.append(["temp_range", "FAIL", f"Out of range: {failtemps}", ""])
-
-    # 3. Temp rise < 10C (across all those 4 temp keys, min at start vs max at end)
-    t_start = [
-        float(aux[0][k])
-        for k in temp_keys
-        if aux and k in aux[0] and aux[0][k] not in ("", None)
-    ]
-    t_end = [
-        float(aux[-1][k])
-        for k in temp_keys
-        if aux and k in aux[-1] and aux[-1][k] not in ("", None)
-    ]
-    temp_rise = (max(t_end) if t_end else 0) - (min(t_start) if t_start else 0)
-    if t_start and t_end and temp_rise < 10:
-        result_table.append(["temp_rise", "PASS", f"ΔT={temp_rise:.2f}°C", ""])
-    else:
-        result_table.append(["temp_rise", "FAIL", f"ΔT={temp_rise}", ""])
-
-    # 4. Charge capacity 41–45 Ah (use capacity_ah or chg_cap_ah from step)
-    cap = None
-    for key in ("capacity_ah", "chg_cap_ah"):
-        if key in step:
-            try:
-                cap = float(step[key])
+        for field in error_fields:
+            if row.get(field, "0") not in ("0", 0):
+                error_found = True
                 break
+        if error_found:
+            break
+    if not aux:
+        result_table.append(
+            ["bms_errors", "NG", "No aux data in window", "Cannot check BMS errors"]
+        )
+    elif not error_found:
+        result_table.append(
+            ["bms_errors", "PASS", "No BMS errors found", "All bms_err_* fields = 0"]
+        )
+    else:
+        result_table.append(
+            ["bms_errors", "NG", "BMS errors reported", "At least one bms_err_* ≠ 0"]
+        )
+
+    # Only use temp fields 1–4 for all temperature checks!
+    temp_fields = [f"bms_temp_{i}_c" for i in range(1, 5)]
+
+    # 2. All reported temperature values between 20–50°C
+    temps = []
+    out_of_range = False
+    for row in aux:
+        for k in temp_fields:
+            try:
+                fval = float(row.get(k, -100))
+                if fval != -40 and fval != -100:
+                    temps.append(fval)
+                    if not (20 <= fval <= 50):
+                        out_of_range = True
             except Exception:
-                cap = None
+                continue
+    if not aux or not temps:
+        result_table.append(
+            ["temp_within_20_50", "NG", "No temperature data", "No data to check"]
+        )
+    elif not out_of_range:
+        result_table.append(
+            [
+                "temp_within_20_50",
+                "PASS",
+                f"All temps in 20–50°C",
+                "All temperature probes within spec",
+            ]
+        )
+    else:
+        outvals = [t for t in temps if t < 20 or t > 50]
+        result_table.append(
+            [
+                "temp_within_20_50",
+                "NG",
+                f"Out of range: {outvals}",
+                "At least one temp probe <20°C or >50°C",
+            ]
+        )
+
+    # 3. Temperature rise from start to finish <10°C (use all temp probes)
+    temp_rises = []
+    for k in temp_fields:
+        try:
+            series = [
+                float(row.get(k, -100))
+                for row in aux
+                if float(row.get(k, -100)) != -40 and float(row.get(k, -100)) != -100
+            ]
+            if series:
+                rise = max(series) - min(series)
+                temp_rises.append(rise)
+        except Exception:
+            continue
+    max_rise = max(temp_rises) if temp_rises else None
+    if max_rise is not None and max_rise < 10:
+        result_table.append(
+            ["temp_rise", "PASS", f"Max rise = {max_rise:.2f}°C", "Within 10°C"]
+        )
+    elif max_rise is not None:
+        result_table.append(
+            ["temp_rise", "NG", f"Max rise = {max_rise:.2f}°C", "Exceeds 10°C"]
+        )
+    else:
+        result_table.append(
+            ["temp_rise", "NG", "No temp rise data", "No temperature series found"]
+        )
+
+    # 4. Charge capacity 41–45Ah (prefer step, fallback to cycle)
+    cap = None
+    try:
+        cap = float(step.get("capacity_ah", "0"))
+        if cap == 0:
+            cap = float(cycle.get("chg_cap_ah", "0"))
+    except Exception:
+        cap = None
     if cap is not None and 41 <= cap <= 45:
-        result_table.append(["charge_capacity", "PASS", f"capacity={cap:.3f}Ah", ""])
+        result_table.append(
+            ["charge_capacity", "PASS", f"Capacity={cap:.3f}Ah", "Within 41–45Ah"]
+        )
+    elif cap is not None:
+        result_table.append(
+            ["charge_capacity", "NG", f"Capacity={cap:.3f}Ah", "Out of range 41–45Ah"]
+        )
     else:
-        result_table.append(["charge_capacity", "FAIL", f"capacity={cap}", ""])
+        result_table.append(
+            ["charge_capacity", "NG", "Capacity not found", "No data to check"]
+        )
 
-    # 5. max-min temp < 3C (all temp_keys, at any time)
-    temp_spread = (max(temps) - min(temps)) if temps else None
-    if temp_spread is not None and temp_spread < 3:
-        result_table.append(["temp_spread", "PASS", f"ΔT={temp_spread:.2f}°C", ""])
+    # 5. Max-min temp <3°C (probe delta at any time)
+    min_deltas = []
+    for row in aux:
+        rowtemps = []
+        for k in temp_fields:
+            try:
+                fval = float(row.get(k, -100))
+                if fval != -40 and fval != -100:
+                    rowtemps.append(fval)
+            except Exception:
+                continue
+        if rowtemps:
+            min_deltas.append(max(rowtemps) - min(rowtemps))
+    max_probe_delta = max(min_deltas) if min_deltas else None
+    if max_probe_delta is not None and max_probe_delta < 3:
+        result_table.append(
+            [
+                "temp_probe_delta",
+                "PASS",
+                f"Max ΔT={max_probe_delta:.2f}°C",
+                "Within 3°C",
+            ]
+        )
+    elif max_probe_delta is not None:
+        result_table.append(
+            ["temp_probe_delta", "NG", f"Max ΔT={max_probe_delta:.2f}°C", "Exceeds 3°C"]
+        )
     else:
-        result_table.append(["temp_spread", "FAIL", f"ΔT={temp_spread}", ""])
+        result_table.append(
+            ["temp_probe_delta", "NG", "No probe delta data", "No data to check"]
+        )
 
-    # 6. MOSFET temp < 75C (mos_temp)
+    # 6. MOSFET temp <75°C (mos_temp)
     mos_temps = []
     for row in aux:
         try:
-            mos_temps.append(float(row["mos_temp"]))
+            fval = float(row.get("mos_temp", -100))
+            if fval != -100:
+                mos_temps.append(fval)
         except Exception:
-            pass
-    if mos_temps and max(mos_temps) < 75:
-        result_table.append(["mosfet_temp", "PASS", f"max={max(mos_temps):.2f}°C", ""])
-    else:
+            continue
+    over_75 = any(mt > 75 for mt in mos_temps)
+    if not aux or not mos_temps:
         result_table.append(
-            ["mosfet_temp", "FAIL", f"max={max(mos_temps) if mos_temps else None}", ""]
+            ["mosfet_temp", "NG", "No MOSFET temp data", "No data to check"]
+        )
+    elif not over_75:
+        result_table.append(
+            [
+                "mosfet_temp",
+                "PASS",
+                f"Max MOSFET temp = {max(mos_temps):.2f}°C",
+                "All ≤ 75°C",
+            ]
+        )
+    else:
+        overvals = [mt for mt in mos_temps if mt > 75]
+        result_table.append(
+            ["mosfet_temp", "NG", f"Over 75°C: {overvals}", "MOSFET temp exceeds 75°C"]
         )
 
     return result_table
 
 
+# =============== MAIN CHARGE STEP CHECKER ===============
 def main(json_path):
     with open(json_path) as f:
         data = json.load(f)
-
     step_list = data["data"].get("step", [])
     aux = data["data"].get("auxDBC") or data["data"].get("aux_dbc", [])
+    cycle = data["data"].get("cycle", [{}])[0]  # For chg_cap_ah
 
-    print("Available step names in your parsed JSON:")
-    for step in step_list:
-        print(f"  - Step {step.get('step_index', '')}: '{step.get('step_type', '')}'")
-
-    charge_pattern = re.compile(r"chg|charge", re.IGNORECASE)
-    for step in step_list:
-        if charge_pattern.search(step.get("step_type", "")):
-            charge_result = check_charge_step(step, aux)
-            print(tabulate(charge_result, headers="firstrow", tablefmt="github"))
-            break
+    cccv_step = find_cccv_step(step_list)
+    if cccv_step:
+        print(
+            f"\n🔍 Checking step: {cccv_step.get('step_name', '')} | Duration: {cccv_step.get('step_time', '')}"
+        )
+        charge_result = check_charge_step(cccv_step, aux, cycle)
+        print(tabulate(charge_result, headers="firstrow", tablefmt="github"))
     else:
-        print("No 'Charge' step found in parsed JSON.")
+        print("No suitable CCCV Chg step found.")
 
 
 if __name__ == "__main__":
-    main("/Users/rio.wijaya/Downloads/LimeNDAX/parsed_output.json")
+    main(
+        "/Users/riorizki/development/repos/ION-Mobility-Team/mes/LimeNDAX/result/LG_2_EOL_test_15-1-4-20250428125222_response.json"
+    )

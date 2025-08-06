@@ -1,10 +1,34 @@
 import pandas as pd
 import re
 import json
+import logging
 from typing import Optional, Dict, List, Any
+from pathlib import Path
+
+# Import improved utilities (fallback to inline if not available)
+try:
+    from .utils import (
+        HeaderNormalizer,
+        DataFrameProcessor,
+        ExcelLoader,
+        ValidationUtils,
+    )
+    from .improved_parser import ImprovedExcelParser
+
+    USE_IMPROVED = True
+except ImportError:
+    USE_IMPROVED = False
+    logging.warning(
+        "Improved parser utilities not available, using legacy implementation"
+    )
 
 
 def normalize_header(header):
+    """Legacy normalize_header function for backward compatibility."""
+    if USE_IMPROVED:
+        return HeaderNormalizer.normalize_header(header)
+
+    # Legacy implementation
     if not isinstance(header, str):
         header = str(header)
     header = header.strip()
@@ -36,6 +60,12 @@ def normalize_header(header):
 
 
 def clean_dataframe(df: pd.DataFrame, drop_no_column: bool = True) -> pd.DataFrame:
+    """Legacy clean_dataframe function for backward compatibility."""
+    if USE_IMPROVED:
+        processor = DataFrameProcessor()
+        return processor.clean_dataframe(df, drop_no_column=drop_no_column)
+
+    # Legacy implementation
     if df is None or df.empty:
         return df
     if drop_no_column and len(df.columns) > 0:
@@ -52,6 +82,11 @@ def clean_dataframe(df: pd.DataFrame, drop_no_column: bool = True) -> pd.DataFra
 
 def load_workbook(file_path: str) -> Dict[str, pd.DataFrame]:
     """Loads all sheets in the Excel workbook (with no header by default)."""
+    if USE_IMPROVED:
+        loader = ExcelLoader()
+        return loader.load_workbook(file_path)
+
+    # Legacy implementation
     try:
         # Loads ALL sheets as DataFrames; headers handled per parser
         sheets = pd.read_excel(
@@ -73,7 +108,7 @@ def parse_aux_dbc(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
     if df.empty:
         return []
     data = df.to_dict(orient="records")
-    return data if data else []
+    return data[:1] if data else []
 
 
 def parse_cycle(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
@@ -86,7 +121,7 @@ def parse_cycle(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
     if df.empty:
         return []
     data = df.to_dict(orient="records")
-    return data if data else []
+    return data[:1] if data else []
 
 
 def parse_idle(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
@@ -98,7 +133,7 @@ def parse_idle(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
     if df.empty:
         return []
     data = df.to_dict(orient="records")
-    return data if data else []
+    return data[:1] if data else []
 
 
 def parse_log(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
@@ -110,7 +145,7 @@ def parse_log(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
     if df.empty:
         return []
     data = df.to_dict(orient="records")
-    return data if data else []
+    return data[:1] if data else []
 
 
 def parse_others(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
@@ -134,7 +169,7 @@ def parse_record(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
     if df.empty:
         return []
     data = df.to_dict(orient="records")
-    return data if data else []
+    return data[:1] if data else []
 
 
 def parse_step(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
@@ -146,7 +181,7 @@ def parse_step(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
     if df.empty:
         return []
     data = df.to_dict(orient="records")
-    return data if data else []
+    return data[:1] if data else []
 
 
 def parse_test(df: Optional[pd.DataFrame]) -> dict:
@@ -269,6 +304,21 @@ def parse_unit(df: Optional[pd.DataFrame]) -> Dict[str, Any]:
 
 
 def parse_all_sheets(file_path: str) -> Dict[str, Any]:
+    """Parse all sheets from Excel file with improved error handling."""
+    # Use improved parser if available
+    if USE_IMPROVED:
+        try:
+            parser = ImprovedExcelParser()
+            result = parser.parse_file(file_path)
+            # Convert to legacy format for compatibility
+            if "data" in result:
+                return {"file_path": file_path, "data": result["data"]}
+            else:
+                return result
+        except Exception as e:
+            logging.warning(f"Improved parser failed, falling back to legacy: {e}")
+
+    # Legacy implementation
     data = {}
     dict_sheets = ["test", "unit"]
     # Load all sheets ONCE
@@ -283,8 +333,22 @@ def parse_all_sheets(file_path: str) -> Dict[str, Any]:
         "test": parse_test,
         "unit": parse_unit,
     }
+
+    # Map sheet names to normalized result keys
+    result_key_map = {
+        "auxDBC": "aux_dbc",
+        "cycle": "cycle",
+        "idle": "idle",
+        "log": "log",
+        "record": "record",
+        "step": "step",
+        "test": "test",
+        "unit": "unit",
+    }
+
     for sheet_name, parser_func in parser_map.items():
         df = sheets.get(sheet_name)
+        result_key = result_key_map.get(sheet_name, sheet_name)
         try:
             if parser_func == parse_others:
                 parsed_data = parser_func(df) if df is not None else []
@@ -292,10 +356,10 @@ def parse_all_sheets(file_path: str) -> Dict[str, Any]:
                 parsed_data = parser_func(df) if df is not None else {}
             else:
                 parsed_data = parser_func(df) if df is not None else []
-            data[sheet_name] = parsed_data
+            data[result_key] = parsed_data
         except Exception as e:
             print(f"Error parsing {sheet_name}: {e}")
-            data[sheet_name] = {} if sheet_name in dict_sheets else []
+            data[result_key] = {} if sheet_name in dict_sheets else []
     return {"file_path": file_path, "data": data}
 
 
@@ -330,34 +394,34 @@ def parse_sheet(file_path: str, sheet_name: str, **kwargs) -> Any:
 if __name__ == "__main__":
     import sys
 
-    if len(sys.argv) < 2:
-        print("Usage: python parser.py <file_path> [sheet_name]")
-        print("Examples:")
-        print("  python parser.py file.xlsx           # Parse all sheets")
-        print("  python parser.py file.xlsx test      # Parse specific sheet")
-        print("")
-        print("Output format for all sheets:")
-        print("{")
-        print('  "file_path": "path/to/file.xlsx",')
-        print('  "data": {')
-        print('    "test": {...},')
-        print('    "unit": {...},')
-        print('    "aux_dbc": [...],')
-        print('    "cycle": [...],')
-        print('    "idle": [...],')
-        print('    "log": [...],')
-        print('    "record": [...],')
-        print('    "step": [...]')
-        print("  }")
-        print("}")
-        sys.exit(1)
-    file_path = sys.argv[1]
+    # Use improved parser if available
+    if USE_IMPROVED:
+        try:
+            from .improved_parser import main as improved_main
+
+            improved_main()
+            sys.exit(0)
+        except Exception as e:
+            logging.warning(f"Improved parser main failed, using legacy: {e}")
+
+    # Legacy main implementation
+    file_path = "/Users/riorizki/development/repos/ION-Mobility-Team/mes/LimeNDAX/data/LG_2_EOL_test_15-1-4-20250428125222.xlsx"
+
+    if len(sys.argv) >= 2:
+        file_path = sys.argv[1]
+
     if len(sys.argv) >= 3:
         sheet_name = sys.argv[2]
         result = parse_sheet(file_path, sheet_name)
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
         result = parse_excel_file(file_path)
-        with open("parsed_output.json", "w", encoding="utf-8") as f:
+
+        # Ensure result directory exists
+        output_dir = Path("result")
+        output_dir.mkdir(exist_ok=True)
+
+        output_file = output_dir / "parsed_output.json"
+        with open(output_file, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
-        print("Parsed data written to parsed_output.json")
+        print(f"Parsed data written to {output_file}")
