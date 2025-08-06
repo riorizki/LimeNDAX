@@ -4,6 +4,79 @@ Configuration settings for Excel parsing operations.
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+import os
+
+
+@dataclass
+class DatabaseConfig:
+    """Configuration for database connection."""
+
+    host: str = "localhost"
+    user: str = "root"
+    password: str = ""
+    database: str = "battery_line_pack"
+    port: int = 3306
+    charset: str = "utf8mb4"
+
+    # Connection pool settings
+    pool_name: str = "battery_pool"
+    pool_size: int = 5
+    pool_reset_session: bool = True
+
+    # Connection timeout settings
+    connection_timeout: int = 10
+    autocommit: bool = False
+
+    # SSL settings
+    use_ssl: bool = False
+    ssl_disabled: bool = True
+
+    @classmethod
+    def from_environment(cls) -> "DatabaseConfig":
+        """Create database configuration from environment variables."""
+        return cls(
+            host=os.getenv("DB_HOST", "localhost"),
+            user=os.getenv("DB_USER", "root"),
+            password=os.getenv("DB_PASSWORD", ""),
+            database=os.getenv("DB_NAME", "battery_line_pack"),
+            port=int(os.getenv("DB_PORT", "3306")),
+            charset=os.getenv("DB_CHARSET", "utf8mb4"),
+            pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+            connection_timeout=int(os.getenv("DB_TIMEOUT", "10")),
+            autocommit=os.getenv("DB_AUTOCOMMIT", "false").lower() == "true",
+            use_ssl=os.getenv("DB_USE_SSL", "false").lower() == "true",
+        )
+
+    def to_connection_dict(self) -> Dict:
+        """Convert to dictionary format for mysql.connector.connect()."""
+        config = {
+            "host": self.host,
+            "user": self.user,
+            "password": self.password,
+            "database": self.database,
+            "port": self.port,
+            "charset": self.charset,
+            "connection_timeout": self.connection_timeout,
+            "autocommit": self.autocommit,
+            "ssl_disabled": self.ssl_disabled,
+        }
+
+        if self.use_ssl:
+            config["ssl_disabled"] = False
+
+        return config
+
+    def to_pool_dict(self) -> Dict:
+        """Convert to dictionary format for connection pooling."""
+        config = self.to_connection_dict()
+        config.update(
+            {
+                "pool_name": self.pool_name,
+                "pool_size": self.pool_size,
+                "pool_reset_session": self.pool_reset_session,
+            }
+        )
+        return config
 
 
 @dataclass
@@ -107,3 +180,6 @@ class ParserConfig:
 
 # Global configuration instance
 config = ParserConfig()
+
+# Database configuration instance
+db_config = DatabaseConfig.from_environment()
